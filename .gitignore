@@ -1,0 +1,24 @@
+# Unreal build products and local editor state
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# IDE state
+.vs/
+.vscode/
+*.VC.db
+*.VC.opendb
+*.sdf
+*.sln
+*.suo
+*.opensdf
+
+# Generated project files
+*.xcodeproj
+*.xcworkspace
+
+# Local OS files
+.DS_Store
+Thumbs.db
+
