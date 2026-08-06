@@ -5,6 +5,8 @@
 #include "Engine/StaticMesh.h"
 #include "GeometryCollection/GeometryCollectionComponent.h"
 #include "GeometryCollection/GeometryCollectionObject.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
@@ -75,11 +77,17 @@ void AWorldDestructibleBox::BeginPlay()
 		{
 			IntactMesh->SetPhysMaterialOverride(WoodMaterial);
 		}
+		IntactMesh->SetLinearDamping(GetSettings().DestructibleIntactLinearDamping);
+		IntactMesh->SetAngularDamping(GetSettings().DestructibleIntactAngularDamping);
 		IntactMesh->SetSimulatePhysics(bEnableIntactPhysics);
 		IntactMesh->SetEnableGravity(bEnableIntactPhysics);
 	}
 	if (GeometryCollection && GeometryCollection->GetRestCollection())
 	{
+		GeometryCollection->SetNotifyBreaks(true);
+		GeometryCollection->OnChaosBreakEvent.AddUniqueDynamic(
+			this,
+			&AWorldDestructibleBox::HandleChaosBreak);
 		UPhysicalMaterial* BasePhysicalMaterial = WoodMaterial;
 		if (!BasePhysicalMaterial && GEngine)
 		{
@@ -94,6 +102,8 @@ void AWorldDestructibleBox::BeginPlay()
 		}
 
 		ConfigureGeometryCollectionMass();
+		GeometryCollection->SetLinearDamping(GetSettings().DestructibleDebrisLinearDamping);
+		GeometryCollection->SetAngularDamping(GetSettings().DestructibleDebrisAngularDamping);
 		// Pre-warm an inert Dynamic proxy so runtime destruction never relies on a
 		// state change that UGeometryCollectionComponent cannot forward to an existing proxy.
 		GeometryCollection->EnableClustering = true;
@@ -103,6 +113,17 @@ void AWorldDestructibleBox::BeginPlay()
 	}
 	SetBoxMassKg(BoxMassKg);
 	CurrentHealth = GetMaxHealth();
+}
+
+void AWorldDestructibleBox::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (GeometryCollection)
+	{
+		GeometryCollection->OnChaosBreakEvent.RemoveDynamic(
+			this,
+			&AWorldDestructibleBox::HandleChaosBreak);
+	}
+	Super::EndPlay(EndPlayReason);
 }
 
 bool AWorldDestructibleBox::EnsureIntactMeshActorRoot()
@@ -287,6 +308,13 @@ void AWorldDestructibleBox::BreakBox(const FWorldInteractionRequest& Request)
 	}
 	bDestroyed = true;
 	const FWorldInteractionSettings& Settings = GetSettings();
+	const float ScaledBreakImpulse =
+		Request.ImpulseStrength * Settings.DestructibleBreakImpulseScale;
+	// Radius-zero requests are direct melee hits and need a small separation floor.
+	// Radial explosions already carry their own authored strength and must not inherit it.
+	const float EffectiveBreakImpulse = Request.Radius <= UE_KINDA_SMALL_NUMBER
+		? FMath::Max(ScaledBreakImpulse, Settings.DestructibleMinimumBreakImpulse)
+		: ScaledBreakImpulse;
 
 	if (GeometryCollection && GeometryCollection->GetRestCollection())
 	{
@@ -328,9 +356,7 @@ void AWorldDestructibleBox::BreakBox(const FWorldInteractionRequest& Request)
 			PendingBreakDirection = GetActorForwardVector();
 		}
 		PendingBreakRadius = FMath::Max(Request.Radius, Settings.DestructibleMinimumBreakRadius);
-		PendingBreakImpulse = FMath::Max(
-			Request.ImpulseStrength,
-			Settings.DestructibleMinimumBreakImpulse);
+		PendingBreakImpulse = EffectiveBreakImpulse;
 		BreakImpulseRetryCount = 0;
 		ApplyBreakImpulse();
 	}
@@ -340,7 +366,7 @@ void AWorldDestructibleBox::BreakBox(const FWorldInteractionRequest& Request)
 		IntactMesh->AddRadialImpulse(
 			Request.Origin,
 			FMath::Max(Request.Radius, Settings.DestructibleMinimumBreakRadius),
-			FMath::Max(Request.ImpulseStrength, Settings.DestructibleMinimumBreakImpulse),
+			EffectiveBreakImpulse,
 			RIF_Linear,
 			Settings.bDestructibleBreakImpulseIgnoresMass);
 		bBreakImpulseApplied = true;
@@ -405,4 +431,40 @@ void AWorldDestructibleBox::ApplyBreakImpulse()
 	GeometryCollection->SetVisibility(true, true);
 	GeometryCollection->SetHiddenInGame(false, true);
 	bBreakImpulseApplied = true;
+}
+
+void AWorldDestructibleBox::HandleChaosBreak(const FChaosBreakEvent& BreakEvent)
+{
+	const FWorldInteractionSettings& Settings = GetSettings();
+	if (!bDestroyed || BreakEvent.Component != GeometryCollection ||
+		SpawnedChaosBreakEffectCount >= Settings.MaxChaosBreakEffectBurstsPerActor ||
+		BreakEvent.Velocity.Size() < Settings.ChaosBreakEffectMinSpeed ||
+		SpawnedChaosBreakEffectIndices.Contains(BreakEvent.Index))
+	{
+		return;
+	}
+
+	UNiagaraSystem* Effect = Settings.ChaosBreakEffect.LoadSynchronous();
+	if (!Effect)
+	{
+		return;
+	}
+
+	FVector Direction = BreakEvent.Velocity.GetSafeNormal();
+	if (Direction.IsNearlyZero())
+	{
+		Direction = PendingBreakDirection;
+	}
+	const float PieceExtent = BreakEvent.Extents.GetAbsMax();
+	const float PieceScale = FMath::Clamp(PieceExtent / 50.0f, 0.35f, 1.5f);
+	if (UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+		GetWorld(),
+		Effect,
+		BreakEvent.Location,
+		Direction.Rotation(),
+		FVector::OneVector * Settings.ChaosBreakEffectScale * PieceScale))
+	{
+		SpawnedChaosBreakEffectIndices.Add(BreakEvent.Index);
+		++SpawnedChaosBreakEffectCount;
+	}
 }

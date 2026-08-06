@@ -9,6 +9,7 @@ CRATE_EXTERIOR_MATERIAL_PATH = f"{ROOT}/Materials/M_Demo_WoodCrate"
 CRATE_INTERIOR_MATERIAL_PATH = f"{ROOT}/Materials/M_Demo_WoodInterior"
 GC_PATH = f"{ROOT}/GeometryCollections/GC_Demo_WoodenCrate_Fractured"
 COMBAT_CONFIG_PATH = "/Game/Rover/Combat/DA_RoverCombatConfig"
+MOVEMENT_CONFIG_PATH = "/Game/Rover/Config/DA_RoverMovementConfig"
 DEFAULT_MAP_PATH = "/Game/ThirdPerson/Lvl_ThirdPerson"
 BOX_TAG = "PhysicsWorldP0Box"
 
@@ -62,6 +63,10 @@ def ensure_physical_material(asset_name: str, surface_type):
     if not isinstance(material, unreal.PhysicalMaterial):
         raise RuntimeError(f"Unexpected asset at {asset_path}: {material}")
     material.set_editor_property("surface_type", surface_type)
+    if asset_name == "PM_Wood":
+        # [PLACEHOLDER] Heavy wood should grip the ground and lose almost all bounce.
+        material.set_editor_property("friction", 0.85)
+        material.set_editor_property("restitution", 0.05)
     if material.get_editor_property("surface_type") != surface_type:
         raise RuntimeError(f"Failed to set surface type on {asset_path}")
     unreal.EditorAssetLibrary.save_loaded_asset(material, only_if_is_dirty=False)
@@ -191,23 +196,37 @@ def ensure_interaction_config(decal_material, niagara_assets):
     settings.set_editor_property("override_world_gravity", True)
     settings.set_editor_property("world_gravity_z", -980.0)
     # [PLACEHOLDER] Keep melee destruction values explicit in the generated DataAsset.
-    settings.set_editor_property("destructible_box_max_health", 25.0)
-    settings.set_editor_property("destructible_box_default_mass_kg", 35.0)
+    settings.set_editor_property("destructible_box_max_health", 10.0)
+    settings.set_editor_property("destructible_box_default_mass_kg", 80.0)
+    settings.set_editor_property("destructible_intact_linear_damping", 0.8)
+    settings.set_editor_property("destructible_intact_angular_damping", 2.0)
+    settings.set_editor_property("destructible_debris_linear_damping", 2.5)
+    settings.set_editor_property("destructible_debris_angular_damping", 4.0)
     settings.set_editor_property("destructible_break_strain", 500000.0)
     settings.set_editor_property("destructible_strain_propagation_depth", 1)
     settings.set_editor_property("destructible_strain_propagation_factor", 1.0)
-    settings.set_editor_property("destructible_directional_break_velocity", 450.0)
+    settings.set_editor_property("destructible_directional_break_velocity", 60.0)
+    settings.set_editor_property("destructible_break_impulse_scale", 0.03)
     settings.set_editor_property("destructible_minimum_break_radius", 180.0)
-    settings.set_editor_property("destructible_minimum_break_impulse", 1200.0)
-    settings.set_editor_property("destructible_break_impulse_ignores_mass", True)
+    settings.set_editor_property("destructible_minimum_break_impulse", 120.0)
+    settings.set_editor_property("destructible_break_impulse_ignores_mass", False)
     settings.set_editor_property("destructible_debris_lifetime", 2.0)
-    fireball_effect = niagara_assets.get("NS_P0_Fireball")
-    explosion_effect = niagara_assets.get("NS_P0_Explosion")
-    impact_effect = niagara_assets.get("NS_P0_SurfaceImpact")
+    fireball_effect = unreal.load_asset(
+        f"{ROOT}/Niagara/NS_PW_Fireball"
+    ) or niagara_assets.get("NS_P0_Fireball")
+    explosion_effect = unreal.load_asset(
+        f"{ROOT}/Niagara/NS_PW_Explosion"
+    ) or niagara_assets.get("NS_P0_Explosion")
+    impact_effect = unreal.load_asset(
+        f"{ROOT}/Niagara/NS_PW_SurfaceImpact"
+    ) or niagara_assets.get("NS_P0_SurfaceImpact")
+    chaos_break_effect = unreal.load_asset(f"{ROOT}/Niagara/NS_PW_ChaosBreak")
     if fireball_effect:
         settings.set_editor_property("fireball_effect", fireball_effect)
     if explosion_effect:
         settings.set_editor_property("explosion_effect", explosion_effect)
+    if chaos_break_effect:
+        settings.set_editor_property("chaos_break_effect", chaos_break_effect)
 
     responses = []
     for surface_type in [
@@ -231,10 +250,14 @@ def ensure_interaction_config(decal_material, niagara_assets):
         )
         if impact_effect:
             response.set_editor_property("impact_effect", impact_effect)
+            response.set_editor_property("impact_effect_scale", 1.0)
         responses.append(response)
     settings.set_editor_property("surface_responses", responses)
     config.set_editor_property("settings", settings)
-    unreal.EditorAssetLibrary.save_loaded_asset(config, only_if_is_dirty=False)
+    if not unreal.EditorAssetLibrary.save_loaded_asset(
+        config, only_if_is_dirty=False
+    ):
+        raise RuntimeError(f"Failed to save {CONFIG_PATH}")
     return config
 
 
@@ -318,6 +341,13 @@ def ensure_melee_trace_settings():
     return combat_config
 
 
+def ensure_character_physics_interaction_settings():
+    movement_config = unreal.load_asset(MOVEMENT_CONFIG_PATH)
+    if not isinstance(movement_config, unreal.RoverMovementConfig):
+        raise RuntimeError(f"Unexpected movement config: {movement_config}")
+    return movement_config
+
+
 def ensure_demo_box() -> None:
     world = unreal.EditorLoadingAndSavingUtils.load_map(DEFAULT_MAP_PATH)
     if not world:
@@ -396,6 +426,7 @@ def main() -> None:
     ensure_demo_crate_mesh(crate_exterior_material)
     config = ensure_interaction_config(decal_material, niagara_assets)
     ensure_melee_trace_settings()
+    ensure_character_physics_interaction_settings()
     geometry_collection = ensure_geometry_collection()
     ensure_demo_box()
 

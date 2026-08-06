@@ -49,6 +49,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "World Interaction|Debug")
 	int32 GetActiveFeedbackDecalCount() const;
 
+	UFUNCTION(BlueprintPure, Category = "World Interaction|Debug")
+	int32 GetSpawnedNiagaraSystemCount() const { return SpawnedNiagaraSystemCount; }
+
 	UFUNCTION(BlueprintCallable, Category = "World Interaction|Debug")
 	void ResetDebugStats();
 
@@ -71,6 +74,7 @@ private:
 	FWorldInteractionSettings FallbackSettings;
 	int32 ProcessedRequestCount = 0;
 	int32 DispatchedReceiverCount = 0;
+	int32 SpawnedNiagaraSystemCount = 0;
 	EPhysicalSurface LastResolvedSurfaceType = SurfaceType_Default;
 	FWorldInteractionResult LastInteractionResult;
 };

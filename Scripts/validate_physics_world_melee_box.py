@@ -13,6 +13,8 @@ EXPECTED_GEOMETRY_COLLECTION = (
 EXPECTED_CAMERA_YAW = 90.0
 MAX_CAMERA_YAW_ERROR = 0.5
 MINIMUM_DEBRIS_EXPANSION = 20.0
+MAXIMUM_DEBRIS_EXPANSION = 200.0
+DEBRIS_OBSERVATION_SECONDS = 0.5
 START_TIMEOUT_SECONDS = 30.0
 ATTACK_TIMEOUT_SECONDS = 20.0
 DEBRIS_TIMEOUT_SECONDS = 2.0
@@ -46,6 +48,9 @@ state = {
     "box_placed_for_sweep": False,
     "max_box_target_error": 0.0,
     "saw_left_hand_attachment": False,
+    "saw_broken": False,
+    "max_debris_expansion": 0.0,
+    "debris_check_start_time": 0.0,
 }
 tick_handle = None
 
@@ -112,7 +117,7 @@ def begin_validation(world):
         actor
         for actor in boxes
         if actor is not None
-        and not actor.is_destroyed()
+        and not actor.is_broken()
         and nearly_equal(actor.get_current_health(), actor.get_max_health())
     ]
     if not candidates:
@@ -133,7 +138,7 @@ def begin_validation(world):
     if any(value is None for value in (combat, weapon, subsystem)):
         finish(False, "melee box test is missing combat, weapon, or interaction subsystem")
         return
-    if box.is_destroyed() or not nearly_equal(
+    if box.is_broken() or not nearly_equal(
         box.get_current_health(), box.get_max_health()
     ):
         finish(False, f"box initial health={box.get_current_health():.1f}")
@@ -307,7 +312,7 @@ def validate_attack_tick():
             )
             return
         state["saw_left_hand_attachment"] = True
-        if not box.is_destroyed() and 1 not in state["damaged_stages"]:
+        if not box.is_broken() and 1 not in state["damaged_stages"]:
             trace_base = state["weapon"].get_socket_location("WeaponTraceBase")
             trace_tip = state["weapon"].get_socket_location("WeaponTraceTip")
             trace_target = trace_base + (trace_tip - trace_base) * 0.85
@@ -327,7 +332,8 @@ def validate_attack_tick():
             )
             state["box_placed_for_sweep"] = True
 
-    current_health = box.get_current_health()
+    box_is_valid = unreal.SystemLibrary.is_valid(box)
+    current_health = box.get_current_health() if box_is_valid else 0.0
     if (
         current_health < state["initial_health"] - 0.01
         and 1 not in state["damaged_stages"]
@@ -352,6 +358,26 @@ def validate_attack_tick():
         if not box.has_applied_break_strain():
             finish(False, "Attack01 did not apply External Strain to the root cluster")
             return
+        if not box.is_broken():
+            finish(False, "Attack01 reduced health to zero without marking the box broken")
+            return
+        if not box.is_geometry_collection_active():
+            finish(False, "Attack01 destroyed box without activating Geometry Collection")
+            return
+        if box.get_break_transform_transfer_error() > 1.0:
+            finish(
+                False,
+                "Geometry Collection transfer error="
+                f"{box.get_break_transform_transfer_error():.2f}cm",
+            )
+            return
+        state["saw_broken"] = True
+
+    if state["saw_broken"] and box_is_valid:
+        state["max_debris_expansion"] = max(
+            state["max_debris_expansion"],
+            box.get_debris_expansion_distance(),
+        )
 
     state["last"] = (
         f"combo={combo_index} request={request_id} trace={trace_active} "
@@ -379,18 +405,8 @@ def validate_attack_tick():
     if not state["saw_left_hand_attachment"]:
         finish(False, "Attack01 Trace never ran from the left-hand weapon")
         return
-    if not box.is_destroyed() or not nearly_equal(current_health, 0.0):
-        finish(False, f"Attack01 did not destroy box; health={current_health:.1f}")
-        return
-    if not box.is_geometry_collection_active():
-        finish(False, "Attack01 destroyed box without activating Geometry Collection")
-        return
-    if box.get_break_transform_transfer_error() > 1.0:
-        finish(
-            False,
-            "Geometry Collection transfer error="
-            f"{box.get_break_transform_transfer_error():.2f}cm",
-        )
+    if not state["saw_broken"]:
+        finish(False, "Attack01 never entered the broken Geometry Collection state")
         return
     if state["subsystem"].get_processed_request_count() != 1:
         finish(
@@ -409,17 +425,46 @@ def validate_attack_tick():
 
     state["phase"] = "checking_debris"
     state["deadline"] = time.monotonic() + DEBRIS_TIMEOUT_SECONDS
+    state["debris_check_start_time"] = unreal.GameplayStatics.get_time_seconds(
+        state["world"]
+    )
     state["last"] = "waiting for deferred Chaos debris impulse"
 
 
 def validate_debris_tick():
     box = state["box"]
-    if not box.has_applied_break_impulse():
+    expansion = state["max_debris_expansion"]
+    elapsed = (
+        unreal.GameplayStatics.get_time_seconds(state["world"])
+        - state["debris_check_start_time"]
+    )
+    if not unreal.SystemLibrary.is_valid(box) and expansion < MINIMUM_DEBRIS_EXPANSION:
+        finish(
+            False,
+            "box lifecycle ended before debris reached the minimum expansion; "
+            f"max={expansion:.1f}cm",
+        )
+        return
+    if unreal.SystemLibrary.is_valid(box) and not box.has_applied_break_impulse():
         state["last"] = "break impulse has not reached the Chaos proxy"
         return
-    expansion = box.get_debris_expansion_distance()
-    state["last"] = f"debris expansion={expansion:.1f}cm"
+    if unreal.SystemLibrary.is_valid(box):
+        expansion = max(expansion, box.get_debris_expansion_distance())
+    state["max_debris_expansion"] = expansion
+    state["last"] = (
+        f"debris expansion={expansion:.1f}cm "
+        f"observation={elapsed:.2f}/{DEBRIS_OBSERVATION_SECONDS:.2f}s"
+    )
+    if expansion > MAXIMUM_DEBRIS_EXPANSION:
+        finish(
+            False,
+            "Attack01 debris response is too light; "
+            f"expansion={expansion:.1f}cm max={MAXIMUM_DEBRIS_EXPANSION:.1f}cm",
+        )
+        return
     if expansion < MINIMUM_DEBRIS_EXPANSION:
+        return
+    if elapsed < DEBRIS_OBSERVATION_SECONDS:
         return
     finish(
         True,

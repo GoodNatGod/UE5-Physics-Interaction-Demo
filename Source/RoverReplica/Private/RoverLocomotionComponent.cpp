@@ -98,6 +98,18 @@ void URoverLocomotionComponent::ApplySettings()
 	CharacterMovement->GravityScale = Settings.GravityScale;
 	CharacterMovement->AirControl = Settings.AirControl;
 	CharacterMovement->RotationRate = FRotator(0.0f, Settings.RotationRate, 0.0f);
+	CharacterMovement->bEnablePhysicsInteraction = Settings.bEnablePhysicsInteraction;
+	CharacterMovement->bPushForceScaledToMass = Settings.bPhysicsInteractionPushForceScaledToMass;
+	CharacterMovement->bTouchForceScaledToMass = Settings.bPhysicsInteractionTouchForceScaledToMass;
+	CharacterMovement->bScalePushForceToVelocity = Settings.bPhysicsInteractionScalePushForceToVelocity;
+	CharacterMovement->Mass = Settings.PhysicsInteractionCharacterMassKg;
+	CharacterMovement->StandingDownwardForceScale = Settings.PhysicsInteractionStandingDownwardForceScale;
+	CharacterMovement->InitialPushForceFactor = Settings.PhysicsInteractionInitialPushForceFactor;
+	CharacterMovement->PushForceFactor = Settings.PhysicsInteractionPushForceFactor;
+	CharacterMovement->TouchForceFactor = Settings.PhysicsInteractionTouchForceFactor;
+	CharacterMovement->MinTouchForce = Settings.PhysicsInteractionMinTouchForce;
+	CharacterMovement->MaxTouchForce = Settings.PhysicsInteractionMaxTouchForce;
+	CharacterMovement->RepulsionForce = Settings.PhysicsInteractionRepulsionForce;
 }
 
 void URoverLocomotionComponent::SetMoveInput(const FVector2D& Input, const FVector& WorldDirection)

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Physics/Experimental/ChaosEventType.h"
 #include "PhysicsInteractable.h"
 #include "WorldInteractionConfig.h"
 #include "WorldDestructibleBox.generated.h"
@@ -45,6 +46,9 @@ public:
 	bool IsDestroyed() const { return bDestroyed; }
 
 	UFUNCTION(BlueprintPure, Category = "World Interaction|Destructible")
+	bool IsBroken() const { return bDestroyed; }
+
+	UFUNCTION(BlueprintPure, Category = "World Interaction|Destructible")
 	UStaticMeshComponent* GetIntactMesh() const { return IntactMesh; }
 
 	UFUNCTION(BlueprintPure, Category = "World Interaction|Destructible")
@@ -64,6 +68,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "World Interaction|Destructible")
 	bool HasAppliedBreakStrain() const { return bBreakStrainApplied; }
+
+	UFUNCTION(BlueprintPure, Category = "World Interaction|Destructible")
+	int32 GetSpawnedChaosBreakEffectCount() const { return SpawnedChaosBreakEffectCount; }
 
 	UFUNCTION(BlueprintPure, Category = "World Interaction|Destructible")
 	float GetDebrisExpansionDistance() const;
@@ -116,6 +123,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "World Interaction|Destructible")
 	TObjectPtr<UStaticMeshComponent> IntactMesh;
@@ -129,6 +137,9 @@ private:
 	void BreakBox(const FWorldInteractionRequest& Request);
 	void ApplyBreakImpulse();
 	float CalculateDebrisSpread() const;
+
+	UFUNCTION()
+	void HandleChaosBreak(const FChaosBreakEvent& BreakEvent);
 
 	FWorldInteractionSettings FallbackSettings;
 	float CurrentHealth = 0.0f;
@@ -146,6 +157,8 @@ private:
 	float BreakRotationTransferErrorDegrees = 0.0f;
 	float BreakScaleTransferError = 0.0f;
 	int32 BreakImpulseRetryCount = 0;
+	int32 SpawnedChaosBreakEffectCount = 0;
+	TSet<int32> SpawnedChaosBreakEffectIndices;
 	static constexpr int32 MaxBreakImpulseRetries = 8;
 	bool bDestroyed = false;
 	bool bBreakStrainApplied = false;

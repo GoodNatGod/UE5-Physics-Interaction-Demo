@@ -1,176 +1,154 @@
 # UE5 Open-Area Physics Interaction Demo
 
-基于 Unreal Engine 5.8 的第三人称开放区域物理交互垂直切片，当前重点是将近战与火球命中转换为可复现的刚体、Chaos 破坏、表面识别和反馈生命周期。
+![实机运行截图：火球触发多箱 Chaos 破裂](./Docs/Media/physics-interaction-demo.png)
 
-| 项目项 | 当前状态 |
+![约 8.5 秒实机演示：武器碰撞可视化、一刀破箱与范围破坏](./Docs/Media/physics-interaction-demo.gif)
+
+这是一个面向**大世界交互策划 / 物理交互方向**的 UE5 可玩垂直切片。我把角色战斗视为玩家与环境沟通的输入方式，重点设计的是：环境如何理解玩家行为、给出有重量的反馈，并在开放区域中保持稳定、可调和可扩展。
+
+| 项目项 | 当前定位 |
 |---|---|
 | 引擎 | Unreal Engine 5.8 |
-| 类型 | C++ 技术演示 / 物理交互作品集 |
-| 当前版本 | P0 交互闭环 |
-| 核心技术 | Chaos、Geometry Collection、Niagara、Physical Material、Editor Scripting、无头 PIE |
-| 公开仓库定位 | 源码、工具、技术文档与自制物理内容展示 |
+| 作品集方向 | 大世界交互策划 / 物理交互原型 |
+| 当前阶段 | 木箱破坏、范围爆炸、表面反馈、动态吊桥 |
+| 我的职责 | 交互规则、体验分层、参数设计、UE 原型实现与验收 |
 
-> 本项目是非官方技术学习与作品集项目，与相关游戏开发商无隶属或授权关系。角色、动作、贴图和武器来自单独取得的第三方素材，其条款禁止公开再分发，因此这些资产不包含在本仓库中。详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+> 这是面向“大世界交互设计”的局部可玩样本，不以当前测试场地宣称完成了大世界。角色与动作只承担交互输入和体验验证，不是本项目的最终主题。
 
-## 项目概述
+## 玩家现在能体验到什么
 
-本地完整演示中，玩家可以使用近战或火球攻击环境。命中首先转换为统一的 `FWorldInteractionRequest`，由 `UWorldInteractionSubsystem` 解析表面类型、路由接收者并分发表现，再驱动完整刚体、Chaos Geometry Collection、Niagara 和灼烧贴花。
+| 玩家行为 | 环境反馈 | 我希望玩家读到的信息 |
+|---|---|---|
+| 近战攻击木箱 | 第一刀命中后立即破裂，碎片继承方向与重量 | 刀真的接触了物体，不是播放一段预设特效 |
+| 开启武器碰撞可视化 | 直接看到刀身 Sweep 的时间与空间范围 | 命中结果可解释，方便策划调攻击手感 |
+| 发射火球 | 范围内多个木箱同时响应，并触发火焰、碎片和贴花 | 同一种输入可以产生范围更大、层级更高的环境反馈 |
+| 站上吊桥 | 桥面承受角色重量并产生轻微下沉 | 动态路径不是装饰，它在承载玩家 |
+| 行走、跑步经过吊桥 | 跑步晃动明显强于行走 | 环境能反映角色当前运动强度 |
+| 起跳与落地 | 起跳产生离板冲量，落地反馈最强 | 垂直速度和身体重量被环境接住 |
+| 移动后自由观察 | 镜头保持玩家选择的方向，不自动拉回角色背后 | 观察环境的控制权属于玩家 |
 
-角色移动与地面三连是稳定的交互载体；当前作品集主线不是继续扩充招式数量，而是完成一个参数可解释、结果可测量、流程可回归的物理交互垂直切片。
+## 交互设计目标
 
-## 已实现内容
+### 1. 战斗输入也是环境语言
 
-### 物理交互 P0
+近战和火球不直接“认识木箱”。它们先表达命中位置、方向、强度、范围与表面，再由环境决定如何响应。这样同一套输入可以继续扩展到石块、金属装置、布料、草地和水面，而不需要为每个技能单独编写一套场景反应。
 
-- 近战和火球统一提交标准化环境交互请求；
-- Physical Material / Surface Type 识别；
-- 定向冲量、径向爆炸和普通模拟刚体响应；
-- 完整木箱刚体到 Chaos Geometry Collection 的破裂接管；
-- 单箱质量覆盖与项目统一世界重力；
-- Wood 表面反馈、Niagara 占位效果和灼烧贴花；
-- 火球、碎片和贴花的受控生命周期；
-- 5 个木箱实例的半径交互与清理验证。
+### 2. 重量感来自一组一致规则
 
-### 角色与战斗载体
+我不把“飞得远”当作物理效果好。木箱、碎片和桥板都有明确质量；冲量、阻尼、重力和回收时间共同决定反馈。目标是让物体能被推动、破坏和晃动，同时避免纸片感、无限旋转和一碰就飞。
 
-- Idle / Walk / Run / Sprint、方向 BlendSpace；
-- 起跳、二段跳、下落和三类落地反馈；
-- Sprint 180 度回身、左右脚急停和相机自动回正；
-- 地面轻攻击三连及输入缓冲；
-- 第一段左手持刀，第二、三段右手持刀；
-- Recovery 阶段移动或跳跃取消；
-- 攻击期间暂停相机自动跟随，保持玩家视角控制；
-- 训练靶、生命值、伤害和轻受击反馈。
+### 3. 动态环境首先要可靠通行
 
-### 工具与验证
+吊桥需要会动，但不能因为追求晃动而让玩家无法通过。桥面摆幅、扭转、端点约束和恢复速度都有边界：玩家能感到脚下变化，桥却不会穿透、散架或持续振荡。
 
-- C++ Runtime 与 Editor 模块分离；
-- Python + Editor C++ 生成 AnimBP、BlendSpace 和 Fracture 资产；
-- PowerShell 统一封装构建与无头 PIE；
-- 武器 Sweep 可视化；
-- 质量、重力、破裂、表面和生命周期专项验证。
+### 4. 大世界交互必须有生命周期预算
+
+碎片、Niagara、贴花和临时对象都需要受控回收。当前原型已经把反馈生命周期纳入规则，后续扩展时会继续记录同时激活数量、回收时间、帧耗与内存，而不是只累加效果数量。
+
+## 场景案例一：一刀破坏木箱
+
+木箱承担最基础的“攻击环境”教学：玩家不需要学习新按键，只要沿用战斗输入，就能立即验证环境是否可交互。
+
+- **玩家行为**：左键近战，刀身在有效帧内扫过箱体。
+- **环境回应**：完整刚体切换为 Chaos 碎片，继承命中方向并产生表面粒子。
+- **设计重点**：第一刀就破坏，减少重复试探；碰撞可视化帮助确认命中时机和范围。
+- **重量控制**：当前箱体按约 `80kg` 量级调试，碎片使用更高阻尼，避免像泡沫一样飞散。
+- **可调维度**：生命、质量、破裂冲量、扩散半径、碎片阻尼、保留时长和淡出时间。
+
+## 场景案例二：火球触发群体反馈
+
+火球用于验证同一交互规则能否从“单点命中”升级为“范围事件”。爆炸范围内的对象独立判断自身材质和响应方式，玩家可以从碎片方向、火焰反馈与贴花位置判断爆心影响。
+
+- 近战强调方向准确和即时破坏；
+- 火球强调范围、层级和同时响应；
+- Wood 已完成真实装配，Stone / Metal 等表面仍处于后续差异化阶段；
+- 爆炸效果不会永久留在场景中，避免开放区域持续累积临时对象。
+
+## 场景案例三：60 板动态吊桥
+
+我把吊桥定义为开放区域中的**动态路径节点**。玩家仅通过站立、步行、跑步、起跳和落地，就能从桥面的下沉、摆动和余振中读出自己的运动状态。
+
+当前桥体由 `60` 块独立物理木板组成，使用 `4` 个可见桥墩 / 挂点和 `63` 个约束，桥面约 `16.77m x 2.00m`。四挂点让宽桥在视觉上更可信，也让两侧受力更稳定。
+
+| 体验问题 | 当前规则 |
+|---|---|
+| 桥够不够像一条可通行路径 | 木板 `200 x 25 x 6cm`，间隙 `3cm` |
+| 是否有自然弧线 | 初始下垂 `120cm` |
+| 是否有重量 | 单板 `15kg` |
+| 跑步是否强于走路 | 实测冲量 `63.2 > 23.3` |
+| 落地是否是最强反馈 | 起跳 / 落地实测 `241.1 / 366.1` |
+| 中段是否容易侧翻扭曲 | 前后摆 `10°`，侧向摆 `2°`，扭转 `0°` |
+| 离开后是否会一直晃 | 线性 / 角阻尼 `1.5 / 4.0`，6 秒后恢复到静止 |
+
+宽桥两端如果使用两组完全相同的强约束，会让端板互相拉扯。当前采用“主挂点负责承载与前后摆、副挂点负责横向稳定”的互补规则，在保留自然下垂的同时避免过约束抖动。
+
+更完整的参数说明见 [物理吊桥系统说明](./Docs/物理吊桥系统说明.md)。
+
+## 今日里程碑 | 2026-08-07
+
+- 取消木板数量上限，只保留 `12` 块的最小安全值；
+- 将原型桥扩展到 `60` 块木板，并完成长桥下垂与载荷调参；
+- 从两端单挂点升级为四桥墩、四挂点的宽桥结构；
+- 建立“站立 < 行走 < 跑步 < 起跳 < 落地”的反馈层级；
+- 抑制中段扭曲和端板过约束，保证桥可晃动也可稳定通行；
+- 关闭移动后的镜头自动回正，停止后等待超过原延迟，实测 Yaw 漂移 `0.00°`；
+- 完成构建、吊桥专项 PIE 与基础角色 PIE 验证。
+
+详细设计取舍、调参表和验证数据见 [2026-08-07 交互设计日志](./Docs/InteractionDesignLog-2026-08-07.zh-CN.md)。
+
+## 体验验证证据
+
+| 验证项 | 当前结果 |
+|---|---:|
+| 桥面规模 | `60` 板 / `63` 约束 / `4` 挂点 |
+| 角色加载后的中心附加下沉 | `15.2cm` |
+| 行走 / 跑步冲量 | `23.3 / 63.2` |
+| 起跳 / 落地冲量 | `241.1 / 366.1` |
+| 离桥 6 秒后的线速度 / 角速度 | `0.0cm/s / 0.0deg/s` |
+| 端点 / 板间最大误差 | `0.56cm / 0.45cm` |
+| 自由镜头等待后的最大 Yaw 漂移 | `0.00°` |
+
+这些数字不是为了展示参数数量，而是用来回答体验问题：反馈层级是否清楚、桥是否能恢复、结构是否稳定、镜头控制权是否被系统抢走。
+
+## 面向大世界的扩展顺序
+
+1. **先完成表面语言**：让 Wood / Stone / Metal 在破坏方式、声音、粒子和残留痕迹上形成稳定差异。
+2. **再扩展持续环境反馈**：全局风、Chaos Cloth、草地形变和水面交互共享世界参数。
+3. **最后证明规模化**：使用 PCG、World Partition / HLOD 和固定测试路线记录 Actor 数量、加载距离、p50 / p95 帧时间与内存。
+
+当前不会把未完成的系统写成能力清单。完整阶段规划见 [Roadmap](./Docs/Roadmap.zh-CN.md)。
 
 ## 操作方式
-
-以下按键对应本地完整演示；公开仓库不附带第三方角色内容。
 
 | 输入 | 功能 |
 |---|---|
 | `WASD` | 移动 |
-| 鼠标 | 控制视角 |
-| `Left Shift` | Sprint |
+| 鼠标 | 自由观察 |
+| `Left Shift` | 跑步 |
 | `Space` | 跳跃 / 二段跳 |
-| `C` | 落地翻滚修饰 |
-| 鼠标左键 | 地面轻攻击 |
+| 鼠标左键 | 近战攻击 |
 | `Q` | 发射火球 |
 
-## 核心架构
+<details>
+<summary><strong>技术与验证附录</strong></summary>
 
-```mermaid
-flowchart TD
-    A["近战 / 火球"] --> B["FWorldInteractionRequest"]
-    B --> C["UWorldInteractionSubsystem"]
-    C --> D["Physical Material / Surface Type"]
-    C --> E["UPhysicsInteractable"]
-    C --> F["普通模拟刚体"]
-    C --> G["Niagara / Decal"]
-    E --> H["AWorldDestructibleBox"]
-    H --> I["完整 StaticMesh 刚体"]
-    H --> J["Chaos Geometry Collection"]
-    K["UWorldInteractionConfig"] --> C
-    K --> H
-```
+项目使用 Chaos、Geometry Collection、Niagara、Physical Material、Physics Constraint、Editor Scripting 和无头 PIE。运行时规则由 C++ 管理，蓝图负责资产装配与可视化调参，Python / PowerShell 用于重复生成和回归验证。
 
-| 模块 | 职责 |
-|---|---|
-| `RoverReplica` | 角色、移动、动画镜像、战斗、交互、火球和木箱运行时 |
-| `RoverReplicaEditor` | AnimGraph、资产生成、Fracture 和 PIE 测试辅助 |
-| `UWorldInteractionSubsystem` | 请求校验、表面解析、接收者路由和共享反馈 |
-| `UPhysicsInteractable` | 环境对象接收统一交互请求的接口 |
-| `AWorldDestructibleBox` | 生命、完整刚体、GC 接管、破裂和回收 |
-| `UWorldInteractionConfig` | 重力、火球、爆炸、木箱、表面和生命周期参数 |
-
-角色和战斗只负责产生请求，不直接依赖木箱、贴花或 Niagara。环境服务使用随 World 创建和销毁的 `UWorldSubsystem`，不依赖关卡中的 Manager 蓝图。
-
-## 技术实现
-
-### 武器 Sweep
-
-高速刀刃判定使用空间采样和时间子步组合：
-
-- 刀根到刀尖 7 点采样；
-- 端点每移动 10 cm 增加一次子步；
-- 单帧最多 8 个子步；
-- 补充刀身横向 Sweep；
-- 每个 Actor 每段攻击只结算一次；
-- 青色表示未命中、红色表示命中、绿色/紫色表示刀根/刀尖。
+公开仓库主要结构：
 
 ```text
-rover.combat.DrawAttackTrace 0/1
-rover.combat.DrawAttackTraceDuration <seconds>
+Source/                        运行时规则、角色交互载体与编辑器辅助
+Content/PhysicsWorldDemo/      自制物理资产、材质、Niagara 与吊桥蓝图
+Scripts/                       构建、配置、检查与无头 PIE
+Docs/                          路线图、设计日志与技术说明
 ```
 
-### Geometry Collection 生成与优化
-
-木箱使用固定随机种子生成 16 个 Voronoi 碎片、1 个根 Cluster 和 17 个 convex implicits。生成器会补齐 GeometryDependentProperties、SimulatableParticles 和 Chaos simulation data，并通过版本属性检测旧资产。
-
-定位到 PlanarCut 在零噪声时仍以 `PointSpacing=1cm` 重拓扑内部面后，将无噪声内部面间距调整为 `100cm`：
-
-| 指标 | 优化前 | 优化后 |
-|---|---:|---:|
-| 内部面数量 | 245,992 | 412 |
-| GC 资产大小 | 22,121,017 bytes | 168,563 bytes |
-| 碎片与碰撞结构 | 16 碎片 | 保持不变 |
-
-### 完整刚体到碎片的接管
-
-破裂前由 StaticMesh 负责稳定碰撞和实例质量；破裂时读取 World Transform、Scale、线速度和角速度，关闭完整网格，再将运动状态交给预热的 Dynamic Geometry Collection Proxy。随后开启 GC 重力和碰撞，提交 External Strain、Breaking Velocity 和冲量，最后显示碎片。
-
-每个木箱拥有 transient Wood Physical Material，根据目标质量和 GC 原始质量换算密度，使完整刚体与 Chaos 使用一致的质量语义，同时避免不同实例污染共享材质。
-
-## 量化验证基线
-
-以下数据来自 2026-08-06 的本地完整项目构建和无头 PIE 日志。
-
-| 验证项 | 结果 |
-|---|---|
-| Editor 构建 | Runtime / Editor 模块通过 UE 5.8 Editor 构建 |
-| 近战破箱 | Attack01 伤害 100，木箱 `25 -> 0`，1 请求 / 1 接收者 |
-| 相机控制 | 攻击期间最大方向误差 `0.00deg` |
-| 武器 Trace | `(Radius, Samples, Step, MaxSubsteps)=(20,7,10,8)` |
-| 质量一致性 | 完整箱与 GC 均为 `35.00kg`；运行时探针均可切换到 `52.50kg` 后恢复 |
-| 统一重力 | `-980cm/s²`；0.208 s 实测位移 `-22.3cm`，理论 `-21.2cm` |
-| 自由落体速度 | 实测 `-203.6cm/s`，理论 `-203.9cm/s` |
-| 完整 P0 | 5 个箱子接收爆炸请求，GC / 贴花激活并完成生命周期清理 |
-
-## 仓库结构
-
-```text
-Source/
-  RoverReplica/                 Runtime C++
-  RoverReplicaEditor/           Editor 工具与测试辅助
-
-Content/PhysicsWorldDemo/       自制 Config、GC、材质、网格和 Niagara 占位资产
-Scripts/                        资产生成、构建和无头 PIE 验证
-Docs/Roadmap.zh-CN.md           分阶段开发规划
-Config/                         项目配置（已移除本机令牌）
-```
-
-`Content/Rover/` 不在公开仓库中。仓库可用于源码审阅和 Editor 模块构建，但不能直接还原本地完整角色表现或运行全部 PIE 验证。
-
-## 环境与构建
-
-要求：
-
-- Windows 10 / 11；
-- Unreal Engine 5.8；
-- Visual Studio 2022，安装 Desktop development with C++ 和 Game development with C++；
-- Git LFS。
+构建要求：Windows 10 / 11、Unreal Engine 5.8、Visual Studio 2022 和 Git LFS。
 
 ```powershell
 git lfs install
-git clone <repository-url>
-cd <repository-directory>
+git clone https://github.com/GoodNatGod/UE5-Physics-Interaction-Demo.git
+cd UE5-Physics-Interaction-Demo
 
 powershell -File .\Scripts\BuildEditor.ps1 `
   -EngineRoot "C:\Program Files\Epic Games\UE_5.8" `
@@ -178,36 +156,18 @@ powershell -File .\Scripts\BuildEditor.ps1 `
   -SkipSync
 ```
 
-脚本会在临时目录构建 `RoverReplicaEditor`，避免中文工程路径影响 UBT。`-EngineRoot` 应改为本机 UE 5.8 安装目录。
-
-完整内容工程的常用回归入口：
+完整本地项目常用验证入口：
 
 ```powershell
 powershell -File .\Scripts\ValidateRoverPIE.ps1 -EngineRoot <UE5.8-path>
-powershell -File .\Scripts\ValidateRoverCombatP0PIE.ps1 -EngineRoot <UE5.8-path>
-powershell -File .\Scripts\ValidatePhysicsWorldBoxPhysicsPIE.ps1 -EngineRoot <UE5.8-path>
-powershell -File .\Scripts\ValidatePhysicsWorldMeleeBoxPIE.ps1 -EngineRoot <UE5.8-path>
 powershell -File .\Scripts\ValidatePhysicsWorldP0PIE.ps1 -EngineRoot <UE5.8-path>
+powershell -File .\Scripts\ValidatePhysicsWorldRopeBridgePIE.ps1 -EngineRoot <UE5.8-path>
 ```
 
-这些 PIE 脚本需要未公开的合法角色资产和完整测试关卡；公开仓库中的验证源码用于展示测试设计，不承诺在缺失资产时直接通过。
+部分 PIE 验证依赖未公开的合法角色资产与完整测试关卡，因此公开仓库主要用于作品集审阅、规则复盘和源码检查。
 
-## 当前限制与路线图
-
-- 当前 Niagara、木箱材质和贴花仍是 P0 占位表现；
-- 只有 Wood 完成真实装配和自动化验证；
-- ChaosNiagara 插件已启用，但尚未接入 Chaos Solver 破裂事件数据接口；
-- Chaos Cloth、全局风、草地 WPO、Water、PCG、World Partition 和 HLOD 尚未完成；
-- 当前没有正式的 p50 / p95、内存和流送性能报告；
-- 完整闪避、重击、空中战斗、锁定和敌人 AI 不属于当前完成范围。
-
-后续顺序是先提升 Wood / Stone / Metal 的差异化反馈和营地场景质量，再接全局风与 Chaos Cloth，最后使用 PCG、World Partition / HLOD 和固定路线性能数据证明规模化能力。
-
-详细规划见 [Docs/Roadmap.zh-CN.md](./Docs/Roadmap.zh-CN.md)。
+</details>
 
 ## 资产与授权
 
-- 本仓库不包含第三方角色、动作、贴图、武器或原始 FBX；
-- 相关游戏名称、角色与商标归各自权利人所有；
-- Unreal Engine 及其内容的使用受 Epic Games 对应许可约束；
-- 当前仓库未附开放源码许可证，代码仅用于作品集审阅；如需复用，请先联系仓库所有者。
+本仓库只公开源码、工具、自制物理内容和演示媒体，不包含第三方角色、动作、贴图、武器或原始 FBX。相关角色与商标归各自权利人所有；本项目与相关游戏开发商无隶属或授权关系。详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。

@@ -82,6 +82,7 @@ void UWorldInteractionSubsystem::ResetDebugStats()
 {
 	ProcessedRequestCount = 0;
 	DispatchedReceiverCount = 0;
+	SpawnedNiagaraSystemCount = 0;
 	LastResolvedSurfaceType = SurfaceType_Default;
 	LastInteractionResult = FWorldInteractionResult();
 }
@@ -313,12 +314,16 @@ bool UWorldInteractionSubsystem::SpawnSurfaceFeedback(
 	{
 		if (UNiagaraSystem* ExplosionEffect = Settings.ExplosionEffect.LoadSynchronous())
 		{
-			UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+			if (UNiagaraFunctionLibrary::SpawnSystemAtLocation(
 				World,
 				ExplosionEffect,
 				FeedbackLocation,
-				ImpactNormal.Rotation());
-			bSpawned = true;
+				ImpactNormal.Rotation(),
+				FVector::OneVector * Settings.ExplosionEffectScale))
+			{
+				++SpawnedNiagaraSystemCount;
+				bSpawned = true;
+			}
 		}
 		if (USoundBase* ExplosionSound = Settings.ExplosionSound.LoadSynchronous())
 		{
@@ -335,12 +340,16 @@ bool UWorldInteractionSubsystem::SpawnSurfaceFeedback(
 
 	if (UNiagaraSystem* ImpactEffect = Response->ImpactEffect.LoadSynchronous())
 	{
-		UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+		if (UNiagaraFunctionLibrary::SpawnSystemAtLocation(
 			World,
 			ImpactEffect,
 			FeedbackLocation,
-			ImpactNormal.Rotation());
-		bSpawned = true;
+			ImpactNormal.Rotation(),
+			FVector::OneVector * Response->ImpactEffectScale))
+		{
+			++SpawnedNiagaraSystemCount;
+			bSpawned = true;
+		}
 	}
 	if (USoundBase* ImpactSound = Response->ImpactSound.LoadSynchronous())
 	{

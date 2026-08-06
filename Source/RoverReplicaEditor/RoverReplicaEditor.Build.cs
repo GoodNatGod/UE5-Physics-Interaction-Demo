@@ -23,6 +23,8 @@ public class RoverReplicaEditor : ModuleRules
 			"GeometryCollectionEditor",
 			"GeometryCollectionEngine",
 			"Kismet",
+			"Niagara",
+			"NiagaraEditor",
 			"UnrealEd"
 		});
 	}

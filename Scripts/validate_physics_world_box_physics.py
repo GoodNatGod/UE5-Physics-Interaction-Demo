@@ -4,6 +4,9 @@ import unreal
 
 
 BOX_TAG = "PhysicsWorldP0Box"
+WOOD_PHYSICAL_MATERIAL_PATH = (
+    "/Game/PhysicsWorldDemo/Materials/PhysicalMaterials/PM_Wood"
+)
 MINIMUM_LIFT_HEIGHT_CM = 500.0
 MIN_CLEARANCE_AFTER_FALL_CM = 250.0
 FALL_SAMPLE_SECONDS = 0.20
@@ -51,6 +54,8 @@ state = {
     "configured_mass_kg": 0.0,
     "probe_mass_kg": 0.0,
     "gravity_z": 0.0,
+    "wood_friction": 0.0,
+    "wood_restitution": 0.0,
     "debris_expansion": 0.0,
 }
 tick_handle = None
@@ -108,7 +113,7 @@ def choose_intact_box(world, pawn):
         actor
         for actor in boxes
         if actor is not None
-        and not actor.is_destroyed()
+        and not actor.is_broken()
         and nearly_equal(actor.get_current_health(), actor.get_max_health(), 0.01)
     ]
     if not candidates:
@@ -136,17 +141,99 @@ def begin_validation(world):
         return
 
     skill = pawn.get_world_skill_component()
+    locomotion = pawn.get_locomotion_component()
+    character_movement = pawn.get_component_by_class(
+        unreal.CharacterMovementComponent
+    )
     subsystem = unreal.RoverEditorTestLibrary.get_world_interaction_subsystem(world)
     intact_mesh = box.get_intact_mesh()
     geometry_collection = box.get_geometry_collection()
     if any(
         value is None
-        for value in (skill, subsystem, intact_mesh, geometry_collection)
+        for value in (
+            skill,
+            locomotion,
+            character_movement,
+            subsystem,
+            intact_mesh,
+            geometry_collection,
+        )
     ):
         fail("box physics test is missing skill, subsystem, or box components")
         return
     if not box.has_geometry_collection_asset():
         fail("destructible box has no Geometry Collection asset")
+        return
+
+    wood_material = unreal.load_asset(WOOD_PHYSICAL_MATERIAL_PATH)
+    if not isinstance(wood_material, unreal.PhysicalMaterial):
+        fail(f"missing wood physical material={WOOD_PHYSICAL_MATERIAL_PATH}")
+        return
+    wood_friction = float(wood_material.get_editor_property("friction"))
+    wood_restitution = float(wood_material.get_editor_property("restitution"))
+    if wood_friction < 0.8 or wood_restitution > 0.1:
+        fail(
+            f"lightweight wood response friction={wood_friction:.2f} "
+            f"restitution={wood_restitution:.2f}"
+        )
+        return
+    state["wood_friction"] = wood_friction
+    state["wood_restitution"] = wood_restitution
+
+    movement_config = locomotion.get_editor_property("movement_config")
+    if not isinstance(movement_config, unreal.RoverMovementConfig):
+        fail("locomotion component has no RoverMovementConfig")
+        return
+    movement_settings = movement_config.get_editor_property("settings")
+    physics_interaction_properties = (
+        ("enable_physics_interaction", "enable_physics_interaction"),
+        (
+            "push_force_scaled_to_mass",
+            "physics_interaction_push_force_scaled_to_mass",
+        ),
+        (
+            "touch_force_scaled_to_mass",
+            "physics_interaction_touch_force_scaled_to_mass",
+        ),
+        (
+            "scale_push_force_to_velocity",
+            "physics_interaction_scale_push_force_to_velocity",
+        ),
+        ("mass", "physics_interaction_character_mass_kg"),
+        (
+            "standing_downward_force_scale",
+            "physics_interaction_standing_downward_force_scale",
+        ),
+        (
+            "initial_push_force_factor",
+            "physics_interaction_initial_push_force_factor",
+        ),
+        ("push_force_factor", "physics_interaction_push_force_factor"),
+        ("touch_force_factor", "physics_interaction_touch_force_factor"),
+        ("min_touch_force", "physics_interaction_min_touch_force"),
+        ("max_touch_force", "physics_interaction_max_touch_force"),
+        ("repulsion_force", "physics_interaction_repulsion_force"),
+    )
+    mismatched_physics_interaction = []
+    for movement_property, settings_property in physics_interaction_properties:
+        actual = character_movement.get_editor_property(movement_property)
+        expected = movement_settings.get_editor_property(settings_property)
+        if isinstance(expected, bool):
+            matches = actual == expected
+        else:
+            matches = nearly_equal(float(actual), float(expected), 0.01)
+        if not matches:
+            mismatched_physics_interaction.append(
+                f"{movement_property}={actual!r}/{expected!r}"
+            )
+    if mismatched_physics_interaction:
+        fail(
+            "CharacterMovement physics interaction differs from MovementConfig: "
+            + ", ".join(mismatched_physics_interaction)
+        )
+        return
+    if float(character_movement.get_editor_property("push_force_factor")) > 50000.0:
+        fail("CharacterMovement push force is still tuned for lightweight props")
         return
 
     interaction_config = box.get_editor_property("interaction_config")
@@ -156,6 +243,29 @@ def begin_validation(world):
     settings = interaction_config.get_editor_property("settings")
     if not settings.get_editor_property("override_world_gravity"):
         fail("shared world gravity override is disabled")
+        return
+    if settings.get_editor_property("destructible_break_impulse_ignores_mass"):
+        fail("destructible break impulse ignores mass")
+        return
+    impulse_scale = float(
+        settings.get_editor_property("destructible_break_impulse_scale")
+    )
+    if impulse_scale <= 0.0 or impulse_scale > 1.0:
+        fail(f"invalid destructible impulse scale={impulse_scale:.3f}")
+        return
+    damping_properties = (
+        "destructible_intact_linear_damping",
+        "destructible_intact_angular_damping",
+        "destructible_debris_linear_damping",
+        "destructible_debris_angular_damping",
+    )
+    invalid_damping = [
+        name
+        for name in damping_properties
+        if float(settings.get_editor_property(name)) <= 0.0
+    ]
+    if invalid_damping:
+        fail(f"non-positive destructible damping={invalid_damping}")
         return
     configured_gravity_z = float(settings.get_editor_property("world_gravity_z"))
     applied_gravity_z = float(subsystem.get_applied_world_gravity_z())
@@ -379,7 +489,7 @@ def trigger_break():
     if result.get_editor_property("receiver_count") < 1:
         fail("airborne break interaction reached no destructible receiver")
         return
-    if not box.is_destroyed():
+    if not box.is_broken():
         fail("airborne box survived the lethal break interaction")
         return
     # Read the component directly: the actor convenience getter intentionally returns
@@ -459,6 +569,10 @@ def validate_geometry_collection():
                 f"mass={state['configured_mass_kg']:.2f}kg",
                 f"gc_mass={state['configured_mass_kg']:.2f}kg",
                 f"mass_probe={state['probe_mass_kg']:.2f}kg",
+                "break_impulse_mass_aware=true",
+                "character_push=heavy",
+                f"wood_friction={state['wood_friction']:.2f}",
+                f"wood_restitution={state['wood_restitution']:.2f}",
                 f"gravity_z={state['gravity_z']:.1f}cm/s2",
                 f"lift={state['lift_height']:.1f}cm",
                 f"fall_dt={state['fall_elapsed']:.3f}s",

@@ -65,6 +65,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Test")
 	static bool RequestPlayInNewWindow();
 
+	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Test", meta = (WorldContext = "WorldContextObject"))
+	static bool CaptureGameViewportBitmap(
+		const UObject* WorldContextObject,
+		const FString& AbsoluteFilename);
+
 	UFUNCTION(BlueprintPure, Category = "Rover|Editor|Test")
 	static FName GetCurrentAnimationStateName(
 		const UAnimInstance* AnimInstance,
@@ -89,6 +94,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Physics World")
 	static FRoverGeometryCollectionStructureStats GetGeometryCollectionStructureStats(
 		const FString& PackagePath = TEXT("/Game/PhysicsWorldDemo/GeometryCollections/GC_Demo_WoodenCrate_Fractured"));
+
+	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Physics World|Niagara")
+	static FString DumpNiagaraSystem(
+		const FString& SystemPath);
+
+	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Physics World|Niagara")
+	static bool ConfigurePhysicsWorldNiagaraAssets();
 
 	UFUNCTION(BlueprintPure, Category = "Rover|Editor|Physics World", meta = (WorldContext = "WorldContextObject"))
 	static UWorldInteractionSubsystem* GetWorldInteractionSubsystem(

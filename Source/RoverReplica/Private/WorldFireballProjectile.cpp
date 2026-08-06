@@ -83,6 +83,7 @@ void AWorldFireballProjectile::BeginPlay()
 	if (UNiagaraSystem* Effect = Settings.FireballEffect.LoadSynchronous())
 	{
 		FireballEffect->SetAsset(Effect);
+		FireballEffect->SetRelativeScale3D(FVector::OneVector * Settings.FireballEffectScale);
 		FireballEffect->Activate(true);
 	}
 	SetLifeSpan(Settings.FireballLifetime);
@@ -141,4 +142,9 @@ void AWorldFireballProjectile::DetonateAtHit(const FHitResult& Hit)
 		}
 	}
 	Destroy();
+}
+
+bool AWorldFireballProjectile::IsFireballEffectActive() const
+{
+	return FireballEffect && FireballEffect->GetAsset() && FireballEffect->IsActive();
 }

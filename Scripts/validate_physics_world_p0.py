@@ -9,7 +9,17 @@ EXPECTED_CONFIG = (
     "DA_WorldInteractionConfig.DA_WorldInteractionConfig"
 )
 EXPECTED_SURFACE = unreal.PhysicalSurface.SURFACE_TYPE2
+EXPECTED_FIREBALL_EFFECT = (
+    "/Game/PhysicsWorldDemo/Niagara/NS_PW_Fireball.NS_PW_Fireball"
+)
+EXPECTED_EXPLOSION_EFFECT = (
+    "/Game/PhysicsWorldDemo/Niagara/NS_PW_Explosion.NS_PW_Explosion"
+)
+EXPECTED_CHAOS_BREAK_EFFECT = (
+    "/Game/PhysicsWorldDemo/Niagara/NS_PW_ChaosBreak.NS_PW_ChaosBreak"
+)
 MINIMUM_DEBRIS_EXPANSION = 20.0
+MAXIMUM_DEBRIS_EXPANSION = 300.0
 EXPECTED_DEBRIS_LIFETIME = 2.0
 START_TIMEOUT_SECONDS = 30.0
 CLEANUP_GRACE_SECONDS = 2.0
@@ -35,6 +45,7 @@ state = {
     "receiver_count": 0,
     "decal_count": 0,
     "debris_expansion": 0.0,
+    "chaos_break_effect_count": 0,
 }
 tick_handle = None
 
@@ -94,11 +105,26 @@ def validate_and_trigger(world):
         return
 
     settings = skill.get_settings()
-    if settings.get_editor_property("fireball_effect") is None:
-        fail("interaction config has no fireball Niagara effect")
+    if settings.get_editor_property("destructible_break_impulse_ignores_mass"):
+        fail("destructible break impulse must respect mass")
         return
-    if settings.get_editor_property("explosion_effect") is None:
-        fail("interaction config has no explosion Niagara effect")
+    if object_path(settings.get_editor_property("fireball_effect")) != EXPECTED_FIREBALL_EFFECT:
+        fail(
+            "unexpected fireball Niagara effect="
+            f"{object_path(settings.get_editor_property('fireball_effect'))}"
+        )
+        return
+    if object_path(settings.get_editor_property("explosion_effect")) != EXPECTED_EXPLOSION_EFFECT:
+        fail(
+            "unexpected explosion Niagara effect="
+            f"{object_path(settings.get_editor_property('explosion_effect'))}"
+        )
+        return
+    if object_path(settings.get_editor_property("chaos_break_effect")) != EXPECTED_CHAOS_BREAK_EFFECT:
+        fail(
+            "unexpected Chaos break Niagara effect="
+            f"{object_path(settings.get_editor_property('chaos_break_effect'))}"
+        )
         return
 
     boxes = unreal.GameplayStatics.get_all_actors_with_tag(world, BOX_TAG)
@@ -106,7 +132,7 @@ def validate_and_trigger(world):
         actor
         for actor in boxes
         if actor is not None
-        and not actor.is_destroyed()
+        and not actor.is_broken()
         and abs(actor.get_current_health() - actor.get_max_health()) <= 0.01
     ]
     if not candidates:
@@ -139,6 +165,9 @@ def validate_and_trigger(world):
     if projectile is None or projectile.has_detonated():
         fail("fireball request did not spawn a live projectile")
         return
+    if not projectile.is_fireball_effect_active():
+        fail("spawned fireball has no active Niagara core/trail")
+        return
 
     if not unreal.RoverEditorTestLibrary.trigger_p0_fireball_impact(projectile, box):
         fail("unable to trigger a real fireball impact against the P0 box")
@@ -167,7 +196,13 @@ def validate_and_trigger(world):
     if not result.get_editor_property("spawned_surface_feedback"):
         fail("explosion request spawned no surface feedback")
         return
-    if not box.is_destroyed() or box.get_current_health() > 0.0:
+    if subsystem.get_spawned_niagara_system_count() < 2:
+        fail(
+            "explosion did not spawn both explosion and surface Niagara; count="
+            f"{subsystem.get_spawned_niagara_system_count()}"
+        )
+        return
+    if not box.is_broken() or box.get_current_health() > 0.0:
         fail(
             "explosion did not destroy the box; "
             f"health={box.get_current_health():.2f}"
@@ -249,6 +284,20 @@ def validate_cleanup():
             state["debris_expansion"],
             state["box"].get_debris_expansion_distance(),
         )
+        if state["debris_expansion"] > MAXIMUM_DEBRIS_EXPANSION:
+            fail(
+                "Geometry Collection debris response is too light; "
+                f"expansion={state['debris_expansion']:.1f}cm "
+                f"max={MAXIMUM_DEBRIS_EXPANSION:.1f}cm"
+            )
+            return
+        state["chaos_break_effect_count"] = max(
+            state["chaos_break_effect_count"],
+            state["box"].get_spawned_chaos_break_effect_count(),
+        )
+        if elapsed >= 1.0 and state["chaos_break_effect_count"] < 1:
+            fail("Chaos break events spawned no secondary Niagara bursts")
+            return
         if elapsed >= 1.0 and state["debris_expansion"] < MINIMUM_DEBRIS_EXPANSION:
             fail(
                 "Geometry Collection pieces did not visibly separate; "
@@ -276,6 +325,12 @@ def validate_cleanup():
             f"expansion={state['debris_expansion']:.1f}cm"
         )
         return
+    if state["debris_expansion"] > MAXIMUM_DEBRIS_EXPANSION:
+        fail(
+            "debris expansion exceeded the heavy-response limit; "
+            f"expansion={state['debris_expansion']:.1f}cm"
+        )
+        return
 
     finish(
         True,
@@ -288,7 +343,9 @@ def validate_cleanup():
                 f"receivers={state['receiver_count']}",
                 "geometry_collection=active",
                 "external_strain=applied",
+                "break_impulse_mass_aware=true",
                 f"debris_expansion={state['debris_expansion']:.1f}cm",
+                f"chaos_niagara_bursts={state['chaos_break_effect_count']}",
                 f"decals={state['decal_count']}",
                 "lifecycle_cleanup=true",
             )

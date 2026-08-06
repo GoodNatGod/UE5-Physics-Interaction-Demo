@@ -15,6 +15,43 @@ struct ROVERREPLICA_API FRoverMovementSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Collision", meta = (ClampMin = "1.0"))
 	float CapsuleHalfHeight = 90.0f;
 
+	// [PLACEHOLDER] Keep physics props movable without inheriting CharacterMovement's very large defaults.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	bool bEnablePhysicsInteraction = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	bool bPhysicsInteractionPushForceScaledToMass = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	bool bPhysicsInteractionTouchForceScaledToMass = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	bool bPhysicsInteractionScalePushForceToVelocity = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "1.0", Units = "kg"))
+	float PhysicsInteractionCharacterMassKg = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "0.0"))
+	float PhysicsInteractionStandingDownwardForceScale = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "0.0"))
+	float PhysicsInteractionInitialPushForceFactor = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "0.0"))
+	float PhysicsInteractionPushForceFactor = 20000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "0.0"))
+	float PhysicsInteractionTouchForceFactor = 0.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	float PhysicsInteractionMinTouchForce = -1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	float PhysicsInteractionMaxTouchForce = 50.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "0.0"))
+	float PhysicsInteractionRepulsionForce = 0.5f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground", meta = (ClampMin = "0.0"))
 	float WalkSpeed = 150.0f;
 
@@ -187,7 +224,7 @@ struct ROVERREPLICA_API FRoverMovementSettings
 	float CameraAutoFollowDelay = 0.3f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0"))
-	float CameraAutoFollowInterpSpeed = 4.5f;
+	float CameraAutoFollowInterpSpeed = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0"))
 	float CameraAutoFollowMaxYawSpeed = 180.0f;

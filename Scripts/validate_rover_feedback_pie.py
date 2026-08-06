@@ -1,4 +1,5 @@
 import math
+import os
 import time
 
 import unreal
@@ -10,6 +11,7 @@ START_TIMEOUT_SECONDS = 30.0
 STOP_TIMEOUT_SECONDS = 15.0
 SUCCESS_MARKER = "ROVER_FEEDBACK_PIE_OK"
 FAILURE_MARKER = "ROVER_FEEDBACK_PIE_FAIL"
+CAMERA_ONLY = os.environ.get("ROVER_VALIDATE_CAMERA_ONLY") == "1"
 
 
 level_editor = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -35,11 +37,7 @@ state = {
     "max_camera_vertical_lag": 0.0,
     "max_root_horizontal_drift": 0.0,
     "camera_release_world_time": 0.0,
-    "camera_last_sample_world_time": 0.0,
-    "camera_last_yaw": 0.0,
-    "camera_last_error": 0.0,
-    "camera_peak_yaw_speed": 0.0,
-    "camera_recenter_started": False,
+    "camera_max_yaw_drift": 0.0,
     "delayed_landing_input_world_time": 0.0,
     "delayed_landing_anim_exit_delay": None,
     "checks": [],
@@ -227,7 +225,7 @@ def initialize(world):
     movement.stop_movement_immediately()
     set_actor_yaw(90.0)
     set_control_yaw(0.0)
-    advance("idle_camera_follow", 6.0)
+    advance("idle_camera_free", 6.0)
 
 
 def run_phase():
@@ -236,13 +234,13 @@ def run_phase():
     movement = state["movement"]
     locomotion = state["locomotion"]
 
-    if phase == "idle_camera_follow":
+    if phase == "idle_camera_free":
         if phase_elapsed() < 1.0:
             return
         control_yaw = state["controller"].get_control_rotation().yaw
-        if not require(abs(yaw_delta(control_yaw, 90.0)) <= 5.0, f"idle camera yaw={control_yaw:.1f}"):
+        if not require(abs(yaw_delta(control_yaw, 0.0)) <= 0.5, f"idle camera drifted yaw={control_yaw:.2f}"):
             return
-        state["checks"].append("idle_camera=followed")
+        state["checks"].append("idle_camera=free")
 
         movement.stop_movement_immediately()
         set_actor_yaw(0.0)
@@ -272,53 +270,30 @@ def run_phase():
         movement.stop_movement_immediately()
         release_time = world_time()
         state["camera_release_world_time"] = release_time
-        state["camera_last_sample_world_time"] = release_time
-        state["camera_last_yaw"] = control_yaw
-        state["camera_last_error"] = abs(yaw_delta(control_yaw, -90.0))
-        state["camera_peak_yaw_speed"] = 0.0
-        state["camera_recenter_started"] = False
-        advance("left_stop_camera", 3.0)
+        state["camera_max_yaw_drift"] = 0.0
+        advance("left_stop_camera_free", 3.0)
         return
 
-    if phase == "left_stop_camera":
+    if phase == "left_stop_camera_free":
         now = world_time()
         release_elapsed = now - state["camera_release_world_time"]
         control_yaw = state["controller"].get_control_rotation().yaw
-        target_error = abs(yaw_delta(control_yaw, -90.0))
-
-        if release_elapsed <= 0.24:
-            if not require(abs(yaw_delta(control_yaw, 0.0)) <= 0.5, f"camera moved during delay yaw={control_yaw:.2f}"):
-                return
-
-        sample_delta = now - state["camera_last_sample_world_time"]
-        yaw_step = abs(yaw_delta(control_yaw, state["camera_last_yaw"]))
-        if sample_delta > 1.0e-4:
-            yaw_speed = yaw_step / sample_delta
-            state["camera_peak_yaw_speed"] = max(state["camera_peak_yaw_speed"], yaw_speed)
-            if not require(yaw_speed <= 190.0, f"camera yaw speed={yaw_speed:.1f} deg/s"):
-                return
-
-        if not require(
-            target_error <= state["camera_last_error"] + 0.1,
-            f"camera recenter reversed error={target_error:.2f} previous={state['camera_last_error']:.2f}",
-        ):
+        yaw_drift = abs(yaw_delta(control_yaw, 0.0))
+        state["camera_max_yaw_drift"] = max(
+            state["camera_max_yaw_drift"], yaw_drift
+        )
+        if not require(yaw_drift <= 0.5, f"stopped camera drifted yaw={control_yaw:.2f}"):
             return
 
-        if yaw_step > 0.01:
-            state["camera_recenter_started"] = True
-        state["camera_last_sample_world_time"] = now
-        state["camera_last_yaw"] = control_yaw
-        state["camera_last_error"] = target_error
-
-        if release_elapsed < 0.4:
-            return
-        if not require(state["camera_recenter_started"], f"camera did not recenter yaw={control_yaw:.2f}"):
-            return
-        if target_error > 0.1:
+        # Wait well past the former 0.3s recenter delay before accepting the result.
+        if release_elapsed < 1.0:
             return
         state["checks"].append(
-            f"stop_camera=delayed_monotonic/{state['camera_peak_yaw_speed']:.0f}dps"
+            f"stop_camera=free/{state['camera_max_yaw_drift']:.2f}deg"
         )
+        if CAMERA_ONLY:
+            finish(True, "checks=" + ",".join(state["checks"]))
+            return
 
         clear_move()
         movement.stop_movement_immediately()
@@ -391,6 +366,7 @@ def run_phase():
         return
 
     if phase == "landing_exit":
+        set_move(0.0, 1.0, unreal.Vector(1.0, 0.0, 0.0))
         pawn.add_movement_input(unreal.Vector(1.0, 0.0, 0.0), 1.0)
         if phase_elapsed() < 0.25:
             return
@@ -405,6 +381,8 @@ def run_phase():
         if not require(current_state == "Grounded", f"animation remained in {current_state}"):
             return
         speed = horizontal_speed(pawn.get_velocity())
+        if speed < 100.0 and phase_elapsed() < 1.0:
+            return
         if not require(speed >= 100.0, f"post-land speed={speed:.1f}"):
             return
         state["checks"].append("landing=grounded")

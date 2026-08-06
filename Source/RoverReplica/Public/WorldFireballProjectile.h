@@ -35,6 +35,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "World Interaction|Fireball")
 	UProjectileMovementComponent* GetProjectileMovement() const { return ProjectileMovement; }
 
+	UFUNCTION(BlueprintPure, Category = "World Interaction|Fireball")
+	bool IsFireballEffectActive() const;
+
 protected:
 	virtual void BeginPlay() override;
 

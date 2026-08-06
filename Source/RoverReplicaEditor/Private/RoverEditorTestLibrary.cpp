@@ -9,6 +9,7 @@
 #include "Chaos/ErrorReporter.h"
 #include "Editor.h"
 #include "Editor/UnrealEdEngine.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
 #include "Engine/StaticMesh.h"
 #include "FractureEngineFracturing.h"
@@ -18,12 +19,23 @@
 #include "GeometryCollection/GeometryCollectionFactory.h"
 #include "GeometryCollection/GeometryCollectionObject.h"
 #include "GeometryCollectionProxyData.h"
+#include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
+#include "Misc/Paths.h"
 #include "Materials/MaterialInterface.h"
+#include "NiagaraEmitter.h"
+#include "NiagaraEmitterHandle.h"
+#include "NiagaraEditorUtilities.h"
+#include "NiagaraParameterStore.h"
+#include "NiagaraRendererProperties.h"
+#include "NiagaraScript.h"
+#include "NiagaraSystem.h"
+#include "NiagaraSystemFactoryNew.h"
 #include "PhysicsProxy/GeometryCollectionPhysicsProxy.h"
 #include "PlayInEditorDataTypes.h"
 #include "UnrealEdGlobals.h"
 #include "UObject/Package.h"
+#include "UnrealClient.h"
 #include "WorldFireballProjectile.h"
 #include "WorldInteractionSubsystem.h"
 
@@ -42,6 +54,261 @@ FString MakeObjectPath(const FString& PackagePath)
 		TEXT("%s.%s"),
 		*PackagePath,
 		*FPackageName::GetLongPackageAssetName(PackagePath));
+}
+
+UNiagaraSystem* CreateOrLoadNiagaraSystemFromTemplate(
+	const FString& DestinationPackagePath,
+	const FString& SourcePackagePath)
+{
+	if (UNiagaraSystem* Existing = LoadObject<UNiagaraSystem>(
+		nullptr,
+		*MakeObjectPath(DestinationPackagePath)))
+	{
+		return Existing;
+	}
+
+	UNiagaraSystem* Source = LoadObject<UNiagaraSystem>(
+		nullptr,
+		*MakeObjectPath(SourcePackagePath));
+	UPackage* Package = CreatePackage(*DestinationPackagePath);
+	if (!Source || !Package)
+	{
+		return nullptr;
+	}
+
+	const FName AssetName(*FPackageName::GetLongPackageAssetName(DestinationPackagePath));
+	UNiagaraSystem* System = Cast<UNiagaraSystem>(StaticDuplicateObject(
+		Source,
+		Package,
+		AssetName,
+		RF_Public | RF_Standalone | RF_Transactional,
+		UNiagaraSystem::StaticClass()));
+	if (System)
+	{
+		FAssetRegistryModule::AssetCreated(System);
+		Package->MarkPackageDirty();
+	}
+	return System;
+}
+
+UNiagaraSystem* CreateOrLoadNiagaraSystemFromEmitters(
+	const FString& DestinationPackagePath,
+	const TArray<FString>& EmitterPackagePaths)
+{
+	if (UNiagaraSystem* Existing = LoadObject<UNiagaraSystem>(
+		nullptr,
+		*MakeObjectPath(DestinationPackagePath)))
+	{
+		return Existing;
+	}
+
+	UPackage* Package = CreatePackage(*DestinationPackagePath);
+	if (!Package)
+	{
+		return nullptr;
+	}
+	const FName AssetName(*FPackageName::GetLongPackageAssetName(DestinationPackagePath));
+	UNiagaraSystem* System = NewObject<UNiagaraSystem>(
+		Package,
+		UNiagaraSystem::StaticClass(),
+		AssetName,
+		RF_Public | RF_Standalone | RF_Transactional);
+	UNiagaraSystemFactoryNew::InitializeSystem(System, true);
+
+	for (const FString& EmitterPackagePath : EmitterPackagePaths)
+	{
+		UNiagaraEmitter* Emitter = LoadObject<UNiagaraEmitter>(
+			nullptr,
+			*MakeObjectPath(EmitterPackagePath));
+		if (!Emitter)
+		{
+			UE_LOG(
+				LogTemp,
+				Error,
+				TEXT("Missing Niagara emitter template %s"),
+				*EmitterPackagePath);
+			return nullptr;
+		}
+		FNiagaraEditorUtilities::AddEmitterToSystem(
+			*System,
+			*Emitter,
+			Emitter->GetExposedVersion().VersionGuid);
+	}
+
+	FAssetRegistryModule::AssetCreated(System);
+	Package->MarkPackageDirty();
+	return System;
+}
+
+void GetAllEmitterScripts(
+	const FVersionedNiagaraEmitterData& EmitterData,
+	TArray<UNiagaraScript*>& OutScripts)
+{
+	OutScripts.AddUnique(EmitterData.EmitterSpawnScriptProps.Script);
+	OutScripts.AddUnique(EmitterData.EmitterUpdateScriptProps.Script);
+	EmitterData.ForEachScript(
+		[&OutScripts](UNiagaraScript* Script)
+		{
+			OutScripts.AddUnique(Script);
+		});
+	OutScripts.Remove(nullptr);
+}
+
+template <typename TValue>
+int32 SetRapidIterationValue(
+	FVersionedNiagaraEmitterData& EmitterData,
+	const FString& ParameterSuffix,
+	const TValue& Value)
+{
+	int32 MatchCount = 0;
+	TArray<UNiagaraScript*> Scripts;
+	GetAllEmitterScripts(EmitterData, Scripts);
+	for (UNiagaraScript* Script : Scripts)
+	{
+		FNiagaraParameterStore& Store = Script->RapidIterationParameters;
+		for (const FNiagaraVariableWithOffset& Variable : Store.ReadParameterVariables())
+		{
+			if (Variable.GetType() != FNiagaraTypeDefinition::Get<TValue>() ||
+				!Variable.GetName().ToString().EndsWith(ParameterSuffix))
+			{
+				continue;
+			}
+
+			const FNiagaraVariable Parameter(Variable.GetType(), Variable.GetName());
+			if (Store.SetParameterValue(Value, Parameter))
+			{
+				++MatchCount;
+			}
+		}
+	}
+	return MatchCount;
+}
+
+void ConfigureFireballNiagaraSystem(UNiagaraSystem& System)
+{
+	for (FNiagaraEmitterHandle& Handle : System.GetEmitterHandles())
+	{
+		FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+		if (!Data)
+		{
+			continue;
+		}
+		const FString EmitterName = Handle.GetName().ToString();
+		const bool bCore = EmitterName.Contains(TEXT("SingleLoopingParticle"));
+		Data->bLocalSpace = bCore;
+		if (bCore)
+		{
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Color"), FLinearColor(6.0f, 0.65f, 0.035f, 1.0f));
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime"), 1.0f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size"), 34.0f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Min"), 28.0f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Max"), 38.0f);
+		}
+		else
+		{
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Color"), FLinearColor(3.5f, 0.22f, 0.012f, 0.9f));
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Min"), 0.08f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Max"), 0.22f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Min"), 4.0f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Max"), 13.0f);
+			SetRapidIterationValue(*Data, TEXT(".SpawnRate.SpawnRate"), 95.0f);
+			SetRapidIterationValue(*Data, TEXT(".AddVelocity.Cone Axis"), FVector3f(-1.0f, 0.0f, 0.0f));
+			SetRapidIterationValue(*Data, TEXT(".AddVelocity.Velocity Speed Scale"), 0.18f);
+			SetRapidIterationValue(*Data, TEXT(".GravityForce.Gravity"), FVector3f(0.0f, 0.0f, 90.0f));
+			SetRapidIterationValue(*Data, TEXT(".Drag.Drag"), 4.0f);
+		}
+	}
+}
+
+void ConfigureExplosionNiagaraSystem(UNiagaraSystem& System)
+{
+	for (FNiagaraEmitterHandle& Handle : System.GetEmitterHandles())
+	{
+		FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+		if (!Data)
+		{
+			continue;
+		}
+		const FString Name = Handle.GetName().ToString();
+		if (Name.Contains(TEXT("OmnidirectionalBurst")))
+		{
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Color"), FLinearColor(5.0f, 0.32f, 0.015f, 1.0f));
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Min"), 0.22f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Max"), 0.72f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Min"), 2.0f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Max"), 7.0f);
+			SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat.Minimum"), 160.0f);
+			SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat.Maximum"), 760.0f);
+			SetRapidIterationValue(*Data, TEXT(".SpawnBurst_Instantaneous.Spawn Count"), 36);
+		}
+		else if (Name.Contains(TEXT("UpwardMeshBurst")))
+		{
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Color"), FLinearColor(1.4f, 0.12f, 0.012f, 1.0f));
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Min"), 0.35f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Max"), 1.05f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Mesh Uniform Scale Min"), 0.25f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Mesh Uniform Scale Max"), 0.8f);
+			SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat.Minimum"), 80.0f);
+			SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat.Maximum"), 430.0f);
+			SetRapidIterationValue(*Data, TEXT(".SpawnBurst_Instantaneous.Spawn Count"), 12);
+		}
+		else if (Name.Contains(TEXT("SimpleSpriteBurst")))
+		{
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Color"), FLinearColor(1.2f, 0.12f, 0.008f, 0.58f));
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime"), 0.42f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Min"), 58.0f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Max"), 125.0f);
+			SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat001.Minimum"), 15.0f);
+			SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat001.Maximum"), 85.0f);
+			SetRapidIterationValue(*Data, TEXT(".ShapeLocation.Sphere Radius"), 12.0f);
+			SetRapidIterationValue(*Data, TEXT(".SpawnBurst_Instantaneous.Spawn Count"), 4);
+		}
+	}
+}
+
+void ConfigureDirectionalImpactNiagaraSystem(
+	UNiagaraSystem& System,
+	const bool bChaosBreak)
+{
+	for (FNiagaraEmitterHandle& Handle : System.GetEmitterHandles())
+	{
+		FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+		if (!Data)
+		{
+			continue;
+		}
+		const FString Name = Handle.GetName().ToString();
+		if (Name.Contains(TEXT("LocationBasedRibbon")))
+		{
+			if (bChaosBreak)
+			{
+				Handle.SetIsEnabled(false, System, false);
+				continue;
+			}
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Color"), FLinearColor(2.2f, 0.28f, 0.025f, 0.78f));
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime"), 0.24f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Ribbon Width"), 0.65f);
+			continue;
+		}
+		if (!Name.Contains(TEXT("DirectionalBurst")))
+		{
+			continue;
+		}
+
+		const FLinearColor Color = bChaosBreak
+			? FLinearColor(0.48f, 0.095f, 0.012f, 1.0f)
+			: FLinearColor(1.8f, 0.22f, 0.018f, 1.0f);
+		SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Color"), Color);
+		SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Min"), bChaosBreak ? 0.3f : 0.18f);
+		SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Max"), bChaosBreak ? 0.8f : 0.55f);
+		SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Sprite Size Min"), bChaosBreak ? FVector2f(3.0f, 7.0f) : FVector2f(1.5f, 5.0f));
+		SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Sprite Size Max"), bChaosBreak ? FVector2f(5.0f, 14.0f) : FVector2f(3.0f, 11.0f));
+		SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat002.Minimum"), bChaosBreak ? 90.0f : 220.0f);
+		SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat002.Maximum"), bChaosBreak ? 360.0f : 680.0f);
+		SetRapidIterationValue(*Data, TEXT(".AddVelocityInCone.Cone Angle"), bChaosBreak ? 72.0f : 52.0f);
+		SetRapidIterationValue(*Data, TEXT(".AddVelocityInCone.Cone Axis"), FVector3f(0.95f, 0.0f, 0.3f));
+		SetRapidIterationValue(*Data, TEXT(".SpawnBurst_Instantaneous.Spawn Count"), bChaosBreak ? 5 : 14);
+	}
 }
 
 int32 ResolveStateMachineIndex(const UAnimInstance* AnimInstance, const int32 FallbackIndex)
@@ -271,6 +538,66 @@ bool URoverEditorTestLibrary::RequestPlayInNewWindow()
 	SessionParams.bAllowOnlineSubsystem = false;
 	GUnrealEd->RequestPlaySession(SessionParams);
 	return true;
+}
+
+bool URoverEditorTestLibrary::CaptureGameViewportBitmap(
+	const UObject* WorldContextObject,
+	const FString& AbsoluteFilename)
+{
+	if (!GEngine
+		|| !WorldContextObject
+		|| AbsoluteFilename.IsEmpty()
+		|| FPaths::IsRelative(AbsoluteFilename)
+		|| !AbsoluteFilename.EndsWith(TEXT(".bmp"), ESearchCase::IgnoreCase))
+	{
+		return false;
+	}
+
+	UWorld* World = GEngine->GetWorldFromContextObject(
+		WorldContextObject,
+		EGetWorldErrorMode::ReturnNull);
+	UGameViewportClient* GameViewport = World ? World->GetGameViewport() : nullptr;
+	FViewport* Viewport = GameViewport ? GameViewport->Viewport : nullptr;
+	if (!Viewport)
+	{
+		return false;
+	}
+
+	const FIntPoint Size = Viewport->GetSizeXY();
+	if (Size.X <= 0 || Size.Y <= 0)
+	{
+		return false;
+	}
+
+	TArray<FColor> Pixels;
+	FReadSurfaceDataFlags ReadFlags(RCM_UNorm);
+	ReadFlags.SetLinearToGamma(true);
+	if (!GetViewportScreenShot(
+		Viewport,
+		Pixels,
+		FIntRect(0, 0, Size.X, Size.Y),
+		ReadFlags)
+		|| Pixels.Num() != Size.X * Size.Y)
+	{
+		return false;
+	}
+
+	for (FColor& Pixel : Pixels)
+	{
+		Pixel.A = 255;
+	}
+
+	const FString Directory = FPaths::GetPath(AbsoluteFilename);
+	if (!Directory.IsEmpty() && !IFileManager::Get().MakeDirectory(*Directory, true))
+	{
+		return false;
+	}
+
+	return FFileHelper::CreateBitmap(
+		*AbsoluteFilename,
+		Size.X,
+		Size.Y,
+		Pixels.GetData());
 }
 
 FName URoverEditorTestLibrary::GetCurrentAnimationStateName(
@@ -564,6 +891,109 @@ FRoverGeometryCollectionStructureStats URoverEditorTestLibrary::GetGeometryColle
 	}
 	return BuildGeometryCollectionStructureStats(
 		LoadObject<UGeometryCollection>(nullptr, *MakeObjectPath(PackagePath)));
+}
+
+FString URoverEditorTestLibrary::DumpNiagaraSystem(const FString& SystemPath)
+{
+	UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, *MakeObjectPath(SystemPath));
+	if (!System)
+	{
+		return FString::Printf(TEXT("ERROR missing Niagara system %s"), *SystemPath);
+	}
+
+	TArray<FString> Lines;
+	Lines.Add(FString::Printf(
+		TEXT("SYSTEM %s exposed={%s}"),
+		*System->GetPathName(),
+		*System->GetExposedParameters().ToString()));
+	for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+	{
+		const FVersionedNiagaraEmitterData* EmitterData = Handle.GetEmitterData();
+		Lines.Add(FString::Printf(
+			TEXT("EMITTER name=%s unique=%s enabled=%s mode=%d renderers=%d"),
+			*Handle.GetName().ToString(),
+			*Handle.GetUniqueInstanceName(),
+			Handle.GetIsEnabled() ? TEXT("true") : TEXT("false"),
+			static_cast<int32>(Handle.GetEmitterMode()),
+			EmitterData ? EmitterData->GetRenderers().Num() : 0));
+		if (!EmitterData)
+		{
+			continue;
+		}
+
+		for (const UNiagaraRendererProperties* Renderer : EmitterData->GetRenderers())
+		{
+			Lines.Add(FString::Printf(
+				TEXT("  RENDERER class=%s enabled=%s"),
+				Renderer ? *Renderer->GetClass()->GetName() : TEXT("None"),
+				Renderer && Renderer->GetIsEnabled() ? TEXT("true") : TEXT("false")));
+		}
+
+		TArray<UNiagaraScript*> Scripts;
+		GetAllEmitterScripts(*EmitterData, Scripts);
+		for (UNiagaraScript* Script : Scripts)
+		{
+			Lines.Add(FString::Printf(
+				TEXT("  SCRIPT usage=%d name=%s rapid={%s}"),
+				static_cast<int32>(Script->GetUsage()),
+				*Script->GetName(),
+				*Script->RapidIterationParameters.ToString()));
+		}
+	}
+
+	const FString Result = FString::Join(Lines, TEXT("\n"));
+	UE_LOG(LogTemp, Display, TEXT("NIAGARA_SYSTEM_DUMP\n%s"), *Result);
+	return Result;
+}
+
+bool URoverEditorTestLibrary::ConfigurePhysicsWorldNiagaraAssets()
+{
+	UNiagaraSystem* Fireball = CreateOrLoadNiagaraSystemFromEmitters(
+		TEXT("/Game/PhysicsWorldDemo/Niagara/NS_PW_Fireball"),
+		{
+			TEXT("/Niagara/DefaultAssets/Templates/Emitters/SingleLoopingParticle"),
+			TEXT("/Niagara/DefaultAssets/Templates/Emitters/Fountain"),
+		});
+	UNiagaraSystem* Explosion = CreateOrLoadNiagaraSystemFromTemplate(
+		TEXT("/Game/PhysicsWorldDemo/Niagara/NS_PW_Explosion"),
+		TEXT("/Niagara/DefaultAssets/Templates/Systems/SimpleExplosion"));
+	UNiagaraSystem* SurfaceImpact = CreateOrLoadNiagaraSystemFromTemplate(
+		TEXT("/Game/PhysicsWorldDemo/Niagara/NS_PW_SurfaceImpact"),
+		TEXT("/Niagara/DefaultAssets/Templates/Systems/DirectionalBurst"));
+	UNiagaraSystem* ChaosBreak = CreateOrLoadNiagaraSystemFromTemplate(
+		TEXT("/Game/PhysicsWorldDemo/Niagara/NS_PW_ChaosBreak"),
+		TEXT("/Niagara/DefaultAssets/Templates/Systems/DirectionalBurst"));
+	if (!Fireball || !Explosion || !SurfaceImpact || !ChaosBreak)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Unable to create all Physics World Niagara assets"));
+		return false;
+	}
+
+	ConfigureFireballNiagaraSystem(*Fireball);
+	ConfigureExplosionNiagaraSystem(*Explosion);
+	ConfigureDirectionalImpactNiagaraSystem(*SurfaceImpact, false);
+	ConfigureDirectionalImpactNiagaraSystem(*ChaosBreak, true);
+
+	for (UNiagaraSystem* System : {Fireball, Explosion, SurfaceImpact, ChaosBreak})
+	{
+		System->RequestCompile(false);
+		System->MarkPackageDirty();
+		System->GetOutermost()->SetDirtyFlag(true);
+	}
+	for (UNiagaraSystem* System : {Fireball, Explosion, SurfaceImpact, ChaosBreak})
+	{
+		System->WaitForCompilationComplete();
+	}
+
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("PHYSICS_WORLD_NIAGARA_ASSETS_OK fireball=%s explosion=%s impact=%s chaos_break=%s"),
+		*Fireball->GetPathName(),
+		*Explosion->GetPathName(),
+		*SurfaceImpact->GetPathName(),
+		*ChaosBreak->GetPathName());
+	return true;
 }
 
 UWorldInteractionSubsystem* URoverEditorTestLibrary::GetWorldInteractionSubsystem(
