@@ -1,0 +1,35 @@
+# Unreal build products and local editor state
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# IDE and generated project files
+.vs/
+.vscode/
+*.VC.db
+*.VC.opendb
+*.sdf
+*.sln
+*.slnx
+*.suo
+*.opensdf
+*.xcodeproj
+*.xcworkspace
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# User-specific Unreal and agent state
+Content/Developers/
+.claude/
+.workbuddy/
+AGENTS.md
+
+# Third-party character, animation, texture, and weapon assets are intentionally excluded.
+Content/Rover/
+
+# Local OS files
+.DS_Store
+Thumbs.db
