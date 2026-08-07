@@ -154,6 +154,25 @@ struct ROVERREPLICA_API FRoverMovementSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
 	bool bUseAnalogWalk = true;
 
+	// [PLACEHOLDER] Prevents combat lunges from pushing simulated movement bases such as rope bridges.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AttackAdvanceScaleOnSimulatedBase = 0.0f;
+
+	// [PLACEHOLDER] Prevents CharacterMovement's native blocking-hit push force from
+	// injecting a combat spike into a simulated movement base. Standing load is unchanged.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AttackPhysicsPushScaleOnSimulatedBase = 0.0f;
+
+	// [PLACEHOLDER] Scales only the character's continuous standing load during attacks on a
+	// simulated base. Keep this at 1 to avoid unloading and rebounding a bridge when combat starts.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AttackStandingDownwardForceScaleOnSimulatedBase = 1.0f;
+
+	// [PLACEHOLDER] Blends the character's standing load and native push forces back in
+	// after an attack, avoiding a second landing-like jolt at Montage completion.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", Units = "s"))
+	float AttackPhysicsRestoreDurationOnSimulatedBase = 0.35f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Air", meta = (ClampMin = "0.0"))
 	float JumpZVelocity = 630.0f;
 

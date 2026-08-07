@@ -60,6 +60,18 @@ public:
 	float GetMaximumPlankAngularSpeedDegrees() const;
 
 	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
+	float GetMaximumPlankRestAngularErrorDegrees() const;
+
+	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
+	float GetPlankRestAngularErrorDegrees(int32 Index) const;
+
+	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
+	FRotator GetPlankNaturalRestRotation(int32 Index) const;
+
+	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
+	bool IsUnloadedRecoveryArmed() const { return bUnloadedRecoveryArmed; }
+
+	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
 	float GetMaximumEndpointPositionError() const;
 
 	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
@@ -84,7 +96,13 @@ public:
 	float GetLastJumpTakeoffImpulseMagnitude() const { return LastJumpTakeoffImpulseMagnitude; }
 
 	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
+	int32 GetLastJumpTakeoffImpulseAffectedPlankCount() const { return LastJumpTakeoffImpulseAffectedPlankCount; }
+
+	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
 	float GetLastLandingImpulseMagnitude() const { return LastLandingImpulseMagnitude; }
+
+	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
+	int32 GetLastLandingImpulseAffectedPlankCount() const { return LastLandingImpulseAffectedPlankCount; }
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Rope Bridge|Config")
 	TObjectPtr<UWorldInteractionConfig> InteractionConfig;
@@ -131,20 +149,35 @@ private:
 	{
 		TWeakObjectPtr<UStaticMeshComponent> PreviousPlank;
 		FVector PreviousVelocity = FVector::ZeroVector;
+		float PeakAirborneDownwardSpeed = 0.0f;
 		float MovementImpulseElapsed = 0.0f;
 		int32 PreviousJumpCount = 0;
 		bool bWasMoving = false;
+		bool bWasFalling = false;
 		bool bAcceptedJumpPending = false;
+		bool bHasTouchedBridge = false;
 	};
 
 	void ClearGeneratedComponents();
 	void RefreshGeneratedComponentReferences();
 	void RebuildRestState(const FWorldRopeBridgeSettings& Settings);
+	void UpdateUnloadedRecovery(
+		float DeltaSeconds,
+		bool bAnyBridgeInteraction,
+		const FWorldRopeBridgeSettings& Settings);
+	void ApplyUnloadedRecoveryTorque(
+		float Alpha,
+		const FWorldRopeBridgeSettings& Settings);
+	FQuat GetNaturalRestRotationForPlank(int32 Index) const;
 	UStaticMeshComponent* FindBridgePlank(UObject* Component) const;
 	void ApplyCharacterImpulse(
 		UStaticMeshComponent* Plank,
 		const ACharacter* Character,
 		float Magnitude);
+	int32 ApplyDistributedVerticalCharacterImpulse(
+		UStaticMeshComponent* CenterPlank,
+		float Magnitude,
+		const FWorldRopeBridgeSettings& Settings);
 	UStaticMeshComponent* CreatePlank(
 		int32 Index,
 		const FTransform& RelativeTransform,
@@ -156,7 +189,7 @@ private:
 		const FVector& RelativeLocation,
 		const FWorldRopeBridgeSettings& Settings,
 		bool bEndpointAnchor = false,
-		bool bSecondaryAnchor = false,
+		bool bSecondaryConstraint = false,
 		int32 AnchorIndex = INDEX_NONE);
 
 	UPROPERTY(Transient)
@@ -169,8 +202,12 @@ private:
 	TArray<FVector> RestAnchorLocations;
 	TArray<float> RestAdjacentPlankDistances;
 	TMap<TWeakObjectPtr<ACharacter>, FCharacterContactState> CharacterContactStates;
+	bool bUnloadedRecoveryArmed = false;
+	float UnloadedRecoveryElapsed = 0.0f;
 	float LastMovementImpulseMagnitude = 0.0f;
 	float LastJumpTakeoffImpulseMagnitude = 0.0f;
+	int32 LastJumpTakeoffImpulseAffectedPlankCount = 0;
 	float LastLandingImpulseMagnitude = 0.0f;
+	int32 LastLandingImpulseAffectedPlankCount = 0;
 	FWorldRopeBridgeSettings FallbackSettings;
 };

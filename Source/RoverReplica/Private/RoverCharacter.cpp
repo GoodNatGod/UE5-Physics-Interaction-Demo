@@ -684,11 +684,13 @@ bool ARoverCharacter::TransferCombatMovementRestriction(const int32 PreviousRequ
 		LocomotionComponent->TransferCombatMovementRestriction(PreviousRequestId, NewRequestId);
 }
 
-void ARoverCharacter::EndCombatMovementRestriction(const int32 RequestId)
+void ARoverCharacter::EndCombatMovementRestriction(
+	const int32 RequestId,
+	const bool bRestorePhysicsPush)
 {
 	if (LocomotionComponent)
 	{
-		LocomotionComponent->EndCombatMovementRestriction(RequestId);
+		LocomotionComponent->EndCombatMovementRestriction(RequestId, bRestorePhysicsPush);
 	}
 }
 

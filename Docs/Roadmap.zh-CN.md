@@ -1,7 +1,7 @@
 # 大世界物理交互 Demo 开发规划
 
-> 版本：v0.4.0
-> 日期：2026-08-06
+> 版本：v0.5.0
+> 日期：2026-08-07
 > 定位：大世界表现与交互 / 技术美术（物理方向）作品集垂直切片
 
 ## 1. 目标变更
@@ -18,29 +18,39 @@
 - 性能与精度取舍数据；
 - 约 3 分钟演示视频、README 和面试讲解材料。
 
-## 2. 范围判断
+## 2. 体验设计支柱
 
-### 2.1 保留
+本项目不以“接入了多少 UE 功能”为完成标准，而以玩家是否能从环境反馈中读懂规则为标准：
+
+1. **输入一致**：近战、投射物、移动、起跳和落地都使用玩家已经掌握的操作，不为物理演示增加孤立按键；
+2. **反馈有层级**：单点命中强调方向与时机，范围爆炸强调影响半径，动态路径强调重量、速度和余振；
+3. **结果可解释**：武器碰撞、表面类型、冲量来源和生命周期均可观察、可调、可回归；
+4. **动态环境可通行**：会晃、会碎不等于体验成立，桥不能塌、碎片不能无限累积、反馈不能抢走玩家控制权；
+5. **规模化有预算**：当前营地只验证交互语言，后续大世界阶段必须补充加载、实例数量、帧时间和内存证据。
+
+## 3. 范围判断
+
+### 3.1 保留
 
 - `ARoverCharacter`、`URoverLocomotionComponent`、`URoverCombatComponent` 与现有动画资产；
 - 地面 AAA、武器 Trace、伤害和受击反馈；
 - C++ 核心逻辑 + 蓝图/AnimBP/Niagara 表现的混合架构；
 - 自动化资产生成、BuildEditor 与无头 PIE 验证流程。
 
-### 2.2 暂停
+### 3.2 暂停
 
 - 完整角色复刻、更多连招、跳跃攻击、闪避、攀爬、钩锁等角色系统；
 - 与物理交互作品集没有直接展示价值的动画手感扩展；
 - 在核心闭环完成前堆叠水体、布料、PCG、HLOD 等孤立功能。
 
-### 2.3 不采用
+### 3.3 不采用
 
 - 关卡中放置并全局查找 `BP_InteractionManager` 的伪单例；
 - 让角色、技能、木箱、贴花和 Niagara 互相直接引用；
 - 用 100m × 100m 场景本身作为“大世界”证明；
 - 只有视频效果、没有参数来源和性能数据的不可复现实现。
 
-## 3. 核心架构
+## 4. 交互规则与实现边界
 
 ```text
 Rover Character / Combat
@@ -58,7 +68,7 @@ UWorldInteractionSubsystem
         UPhysicsInteractable 实现对象
 ```
 
-### 3.1 Runtime 类型
+### 4.1 Runtime 类型
 
 - `EWorldElementType`：Physical、Fire、Wind、Water 等交互元素；
 - `FWorldInteractionRequest`：来源、命中结果、元素、伤害、冲量、半径、标签；
@@ -66,14 +76,14 @@ UWorldInteractionSubsystem
 - `UWorldInteractionSubsystem`：当前 World 内的交互路由、全局参数和调试统计；
 - `UWorldInteractionConfig`：表面映射、爆炸衰减、贴花生命周期、风力等数据。
 
-### 3.2 边界
+### 4.2 边界
 
 - 角色与战斗组件只提交请求，不知道木箱、篝火或贴花 Actor；
 - 可交互 Actor 决定自身状态变化，Subsystem 负责共享反馈和调度；
 - Niagara、材质、Chaos 参数通过 DataAsset、MPC 或 Niagara Parameter Collection 注入；
 - 所有新资产放入 `Content/PhysicsWorldDemo/`，与 `Content/Rover/` 分离。
 
-## 4. 分阶段路线
+## 5. 分阶段路线
 
 ### P0：交互闭环
 
@@ -88,7 +98,27 @@ UWorldInteractionSubsystem
 
 验收场景：玩家发射火球命中木箱，木箱受伤/破碎，同时产生木屑、爆炸冲击和灼烧痕迹；命中石地时切换为石质反馈且不触发木箱逻辑。
 
-### P1：环境表现
+### P0.5：动态路径原型（当前调优中）
+
+目标：让玩家通过站立、行走、跑步、起跳、落地和离开，读懂一条物理吊桥的承重、惯性与恢复过程。
+
+当前结构已完成：
+
+- 60 块独立刚体木板，桥面约 `16.77m x 4.00m`；
+- 两端四个桥墩 / 挂点；
+- 每条板缝左右各一组约束，共 `122` 个 Constraint；
+- 双侧挂点用几何力臂抑制宽木板横滚，保留沿桥方向的自然俯仰；
+- 角色离开后延迟恢复自然弧线，满足角度与速度容差后进入 Chaos Sleep；
+- 起跳和落地冲量分摊到中心板及相邻板，减少单板弹飞。
+
+体验验收尚未完成：
+
+- 最新专项测试中，攻击期间没有武器命中、世界交互请求、攻击推进或动画根运动；
+- 但攻击 Recovery 阶段桥体峰值仍约为 `259.5cm/s`，高于落地后的 `119.7cm/s`；
+- 因此“攻击只改变姿态，不应比落地更强烈地扰动桥面”仍是当前最高优先级问题；
+- 自动化测试下一步必须增加攻击峰值失败阈值，不能只记录数据后仍输出通过。
+
+### P1：表面语言与环境表现
 
 目标：展示统一环境参数影响不同系统。
 
@@ -123,7 +153,7 @@ UWorldInteractionSubsystem
 3. README 记录架构图、资产管线、关键参数和复现步骤；
 4. 整理每个模块的原理、取舍、故障案例与优化结果。
 
-## 5. 技术可行性与风险
+## 6. 可行性与体验风险
 
 | 项目 | 结论 | 主要风险 |
 |---|---|---|
@@ -135,10 +165,11 @@ UWorldInteractionSubsystem
 | Water | 可行 | 插件依赖、材质成本与角色移动模式需隔离 |
 | PCG | 可行 | 必须准备可用植被资产、碰撞和 Nanite/HISM 策略 |
 | World Partition/HLOD | 可行 | 100m 场景无法形成有说服力的流送与 HLOD 数据 |
+| 长链动态吊桥 | 已实现结构，体验调优中 | 双侧约束改善横滚，但角色 Movement Base、持续承重和动画阶段切换仍可能注入非预期能量 |
 
 原文“约 11 天完成全部系统”只适合功能原型，不适合作品集质量承诺。正式排期应以 P0 闭环通过自动化验证后，再根据美术资产准备情况评估。
 
-## 6. P0 实施状态
+## 7. 当前可玩状态
 
 本机 UE 5.8 插件基线：Niagara 与 PCG 为默认启用；Geometry Collection、Chaos Cloth Asset 与 Water 需要工程显式启用，Water 仍标记为 Experimental。P0 只启用实际需要的 Niagara、Geometry Collection/Chaos Solver 依赖，其他插件随阶段开启。
 
@@ -152,9 +183,19 @@ UWorldInteractionSubsystem
 6. 完整箱与破裂 Geometry Collection 共用逐实例质量语义，世界重力由 `DA_WorldInteractionConfig` 统一下发；
 7. 已增加幂等资产生成、Build 和专项 PIE 验证脚本。
 
-当前 Geometry Collection、Niagara 与灼烧贴花均为可替换的 P0 占位资产，不作为最终美术质量交付。专项 PIE 通过后，再进入 Niagara 质量打磨和 Chaos Cloth。
+当前 Geometry Collection 已完成结构与运行时验证；4 个 Niagara 功能系统已装配，并由组件级 `OnChaosBreakEvent` 驱动破裂木屑。完整箱与碎片具有统一质量语义；破裂冲量当前以表现可读性为主，不宣称完全按质量缩放。Niagara、木箱材质和灼烧贴花仍处于 P0 视觉质量，不作为最终美术质量交付。
 
-## 7. 对原始需求文档的修订结论
+当前玩家可体验三类环境语言：
+
+| 玩家行为 | 环境回应 | 当前状态 |
+|---|---|---|
+| 左键近战命中木箱 | 第一刀立即破裂，显示武器 Sweep 和定向碎片反馈 | 已完成 |
+| `Q` 发射火球 | 范围内多个木箱响应，叠加爆炸、木屑和灼烧痕迹 | 已完成 |
+| 站立、走跑、跳跃通过吊桥 | 桥面承重、摆动、衰减并恢复自然弧线 | 结构完成，行为层级调优中 |
+
+下一步顺序调整为：先解决吊桥“攻击扰动 > 落地反馈”的倒挂，并建立自动失败门槛；再打磨 Wood / Stone / Metal 差异化反馈，之后才进入全局风和 Chaos Cloth。
+
+## 8. 对原始需求文档的修订结论
 
 | 原始方案问题 | 改进方式 |
 |---|---|
@@ -166,22 +207,23 @@ UWorldInteractionSubsystem
 | 100m × 100m 营地直接被称为大世界 | 营地只证明交互闭环；World Partition/HLOD 必须在 P3 扩区并提交测量数据 |
 | 性能描述只有 `stat unit` 等命令，没有测试条件 | 固定硬件、构建配置、相机路线、样本时长和 p50/p95 指标后再下结论 |
 
-## 8. P0 验收与证据
+## 9. 验收与证据
 
-### 8.1 自动化验收
+### 9.1 自动化验收
 
 按顺序运行：
 
 ```powershell
-powershell -File Scripts/BuildEditor.ps1
-powershell -File Scripts/ConfigurePhysicsWorldBoxRigidBody.ps1
-powershell -File Scripts/ValidatePhysicsWorldBoxPhysicsPIE.ps1
-powershell -File Scripts/ValidatePhysicsWorldMeleeBoxPIE.ps1
-powershell -File Scripts/ValidatePhysicsWorldP0PIE.ps1
-powershell -File Scripts/ValidateRoverPIE.ps1
+powershell -File Scripts/BuildEditor.ps1 -EngineRoot <UE5.8-path>
+powershell -File Scripts/ConfigurePhysicsWorldBoxRigidBody.ps1 -EngineRoot <UE5.8-path>
+powershell -File Scripts/ValidatePhysicsWorldBoxPhysicsPIE.ps1 -EngineRoot <UE5.8-path>
+powershell -File Scripts/ValidatePhysicsWorldMeleeBoxPIE.ps1 -EngineRoot <UE5.8-path>
+powershell -File Scripts/ValidatePhysicsWorldP0PIE.ps1 -EngineRoot <UE5.8-path>
+powershell -File Scripts/ValidatePhysicsWorldRopeBridgePIE.ps1 -EngineRoot <UE5.8-path>
+powershell -File Scripts/ValidateRoverPIE.ps1 -EngineRoot <UE5.8-path>
 ```
 
-`ConfigurePhysicsWorldBoxRigidBody.ps1` 只更新木箱刚体、木箱材质 Usage、质量和世界重力，不覆盖已经手调的战斗参数。完整重建 P0 占位资产时才运行 `ConfigurePhysicsWorldP0.ps1`。
+`ConfigurePhysicsWorldBoxRigidBody.ps1` 只更新木箱刚体、木箱材质 Usage、质量和世界重力，不覆盖已经手调的战斗参数。完整重建 P0 生成资产时才运行 `ConfigurePhysicsWorldP0.ps1`。
 
 调参入口：
 
@@ -201,7 +243,16 @@ powershell -File Scripts/ValidateRoverPIE.ps1
 - 已引爆投射物在下一帧被清理，木箱碎片按 Config 生命周期回收；
 - 原有 Rover 移动、输入映射和跳跃冒烟不回归。
 
-### 8.2 性能证据模板
+吊桥专项验收必须同时证明：
+
+- 60 板生成 `122` 个 Constraint，其中 59 条板缝均存在左右两组约束；
+- 四个端点 Frame 和板间距离误差不超过约定阈值，不出现 NaN、断裂或持续能量增长；
+- 站立、走、跑、起跳、落地使用彼此可比较的桥体响应指标，而不是只比较输入冲量；
+- 攻击期间世界交互请求、攻击推进、动画根运动和角色相对脚下木板位移均为零；
+- 攻击桥体峰值不得高于落地峰值，最终阈值在下一轮基线测试后固化；
+- 离桥 10 秒后桥体速度归零、自然站姿误差不超过 `2deg`，并退出恢复驱动进入 Sleep。
+
+### 9.2 性能证据模板
 
 P0 只建立采样方法，不凭占位场景宣称已完成优化。正式记录至少包含：
 

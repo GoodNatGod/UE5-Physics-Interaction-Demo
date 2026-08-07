@@ -1,5 +1,6 @@
 #include "WorldRopeBridge.h"
 
+#include "RoverRootMotionSourceNames.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -17,6 +18,8 @@ namespace
 const FName GeneratedBridgeComponentTag(TEXT("RopeBridgeGenerated"));
 const FName PrimaryAnchorConstraintTag(TEXT("RopeBridgePrimaryAnchor"));
 const FName SecondaryAnchorConstraintTag(TEXT("RopeBridgeSecondaryAnchor"));
+const FName InternalNegativeYConstraintTag(TEXT("RopeBridgeInternalNegativeY"));
+const FName InternalPositiveYConstraintTag(TEXT("RopeBridgeInternalPositiveY"));
 constexpr int32 BridgeAnchorCount = 4;
 const FName AnchorConstraintTags[BridgeAnchorCount] = {
 	TEXT("RopeBridgeAnchor0"),
@@ -193,6 +196,7 @@ void AWorldRopeBridge::Tick(const float DeltaSeconds)
 	CharacterTrackingVolume->GetOverlappingActors(OverlappingActors, ACharacter::StaticClass());
 	TSet<TWeakObjectPtr<ACharacter>> ActiveCharacters;
 	ActiveCharacters.Reserve(OverlappingActors.Num());
+	bool bAnyBridgeInteraction = false;
 
 	for (AActor* Actor : OverlappingActors)
 	{
@@ -207,40 +211,77 @@ void AWorldRopeBridge::Tick(const float DeltaSeconds)
 		const FVector CurrentVelocity = Character->GetVelocity();
 		UStaticMeshComponent* CurrentPlank = FindBridgePlank(Character->GetMovementBaseObject());
 		UStaticMeshComponent* PreviousPlank = State.PreviousPlank.Get();
-		const UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
+		State.bHasTouchedBridge = State.bHasTouchedBridge || CurrentPlank != nullptr;
+		bAnyBridgeInteraction = bAnyBridgeInteraction || State.bHasTouchedBridge;
+		UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
 		const float CharacterMass = Movement ? FMath::Max(Movement->Mass, 0.0f) : 0.0f;
+		const bool bIsFalling = Movement && Movement->IsFalling();
+		const bool bSuppressMovementImpulse =
+			Settings.bSuppressRootMotionMovementImpulses && Movement &&
+			Movement->GetRootMotionSource(
+				RoverRootMotionSourceNames::CombatAttackAdvance()).IsValid();
+		if (!CurrentPlank || bIsFalling)
+		{
+			State.PeakAirborneDownwardSpeed = FMath::Max(
+				State.PeakAirborneDownwardSpeed,
+				FMath::Max(0.0f, -CurrentVelocity.Z));
+		}
 		if (Character->JumpCurrentCount > State.PreviousJumpCount)
 		{
 			State.bAcceptedJumpPending = true;
 		}
 
-		if (CurrentPlank && !PreviousPlank)
+		if (CurrentPlank &&
+			(!PreviousPlank || (State.bWasFalling && !bIsFalling)))
 		{
-			const float LandingSpeed = FMath::Max(0.0f, -State.PreviousVelocity.Z);
+			const float LandingSpeed = FMath::Max(
+				State.PeakAirborneDownwardSpeed,
+				FMath::Max(0.0f, -State.PreviousVelocity.Z));
 			if (LandingSpeed >= Settings.MinimumLandingSpeed)
 			{
-				LastLandingImpulseMagnitude = FMath::Min(
-					CharacterMass * LandingSpeed * Settings.LandingImpulseScale,
-					Settings.MaximumLandingImpulse);
-				ApplyCharacterImpulse(CurrentPlank, Character, LastLandingImpulseMagnitude);
+				const float ScaledLandingImpulse =
+					CharacterMass * LandingSpeed * Settings.LandingImpulseScale;
+				LastLandingImpulseMagnitude = ScaledLandingImpulse > 0.0f
+					? FMath::Clamp(
+						ScaledLandingImpulse,
+						Settings.MinimumLandingImpulse,
+						Settings.MaximumLandingImpulse)
+					: 0.0f;
+				LastLandingImpulseAffectedPlankCount = ApplyDistributedVerticalCharacterImpulse(
+					CurrentPlank,
+					LastLandingImpulseMagnitude,
+					Settings);
 			}
 			State.MovementImpulseElapsed = 0.0f;
 		}
 		else if (!CurrentPlank && PreviousPlank && State.bAcceptedJumpPending &&
 			CurrentVelocity.Z >= Settings.MinimumJumpTakeoffSpeed)
 		{
-			LastJumpTakeoffImpulseMagnitude = FMath::Min(
-				CharacterMass * CurrentVelocity.Z * Settings.JumpTakeoffImpulseScale,
-				Settings.MaximumJumpTakeoffImpulse);
-			ApplyCharacterImpulse(PreviousPlank, Character, LastJumpTakeoffImpulseMagnitude);
+			const float ScaledJumpTakeoffImpulse =
+				CharacterMass * CurrentVelocity.Z * Settings.JumpTakeoffImpulseScale;
+			LastJumpTakeoffImpulseMagnitude = ScaledJumpTakeoffImpulse > 0.0f
+				? FMath::Clamp(
+					ScaledJumpTakeoffImpulse,
+					Settings.MinimumJumpTakeoffImpulse,
+					Settings.MaximumJumpTakeoffImpulse)
+				: 0.0f;
+			LastJumpTakeoffImpulseAffectedPlankCount = ApplyDistributedVerticalCharacterImpulse(
+				PreviousPlank,
+				LastJumpTakeoffImpulseMagnitude,
+				Settings);
 			State.MovementImpulseElapsed = 0.0f;
 			State.bAcceptedJumpPending = false;
 		}
 
 		if (CurrentPlank)
 		{
+			if (!bIsFalling)
+			{
+				State.PeakAirborneDownwardSpeed = 0.0f;
+			}
 			const float HorizontalSpeed = CurrentVelocity.Size2D();
-			if (HorizontalSpeed >= Settings.MinimumMovementSpeed &&
+			if (!bSuppressMovementImpulse &&
+				HorizontalSpeed >= Settings.MinimumMovementSpeed &&
 				Settings.MovementImpulseAtReferenceSpeed > 0.0f)
 			{
 				if (!State.bWasMoving)
@@ -277,6 +318,7 @@ void AWorldRopeBridge::Tick(const float DeltaSeconds)
 		State.PreviousPlank = CurrentPlank;
 		State.PreviousVelocity = CurrentVelocity;
 		State.PreviousJumpCount = Character->JumpCurrentCount;
+		State.bWasFalling = bIsFalling;
 		if (!CurrentPlank && !PreviousPlank)
 		{
 			State.bAcceptedJumpPending = false;
@@ -290,6 +332,10 @@ void AWorldRopeBridge::Tick(const float DeltaSeconds)
 			Iterator.RemoveCurrent();
 		}
 	}
+	UpdateUnloadedRecovery(
+		DeltaSeconds,
+		bAnyBridgeInteraction,
+		Settings);
 }
 
 FWorldRopeBridgeSettings AWorldRopeBridge::GetResolvedBridgeSettings() const
@@ -320,6 +366,25 @@ FWorldRopeBridgeSettings AWorldRopeBridge::GetResolvedBridgeSettings() const
 	Settings.PlankMassKg = FMath::Max(0.1f, Settings.PlankMassKg);
 	Settings.LinearDamping = FMath::Max(0.0f, Settings.LinearDamping);
 	Settings.AngularDamping = FMath::Max(0.0f, Settings.AngularDamping);
+	Settings.UnloadedRecoveryDelay = FMath::Max(0.0f, Settings.UnloadedRecoveryDelay);
+	Settings.UnloadedRecoveryBlendInTime = FMath::Max(
+		0.0f,
+		Settings.UnloadedRecoveryBlendInTime);
+	Settings.UnloadedRecoveryAngularStiffness = FMath::Max(
+		0.0f,
+		Settings.UnloadedRecoveryAngularStiffness);
+	Settings.UnloadedRecoveryAngularDamping = FMath::Max(
+		0.0f,
+		Settings.UnloadedRecoveryAngularDamping);
+	Settings.UnloadedRecoveryAngularForceLimit = FMath::Max(
+		0.0f,
+		Settings.UnloadedRecoveryAngularForceLimit);
+	Settings.UnloadedRecoveryRestToleranceDegrees = FMath::Max(
+		0.0f,
+		Settings.UnloadedRecoveryRestToleranceDegrees);
+	Settings.UnloadedRecoveryStopAngularSpeedDegrees = FMath::Max(
+		0.0f,
+		Settings.UnloadedRecoveryStopAngularSpeedDegrees);
 	Settings.MinimumMovementSpeed = FMath::Max(0.0f, Settings.MinimumMovementSpeed);
 	Settings.MovementReferenceSpeed = FMath::Max(1.0f, Settings.MovementReferenceSpeed);
 	Settings.MovementImpulseAtReferenceSpeed = FMath::Max(
@@ -331,12 +396,24 @@ FWorldRopeBridgeSettings AWorldRopeBridge::GetResolvedBridgeSettings() const
 		Settings.JumpTakeoffImpulseScale,
 		0.0f,
 		1.0f);
-	Settings.MaximumJumpTakeoffImpulse = FMath::Max(
+	Settings.MinimumJumpTakeoffImpulse = FMath::Max(
 		0.0f,
+		Settings.MinimumJumpTakeoffImpulse);
+	Settings.MaximumJumpTakeoffImpulse = FMath::Max(
+		Settings.MinimumJumpTakeoffImpulse,
 		Settings.MaximumJumpTakeoffImpulse);
 	Settings.MinimumLandingSpeed = FMath::Max(0.0f, Settings.MinimumLandingSpeed);
 	Settings.LandingImpulseScale = FMath::Clamp(Settings.LandingImpulseScale, 0.0f, 1.0f);
-	Settings.MaximumLandingImpulse = FMath::Max(0.0f, Settings.MaximumLandingImpulse);
+	Settings.MinimumLandingImpulse = FMath::Max(0.0f, Settings.MinimumLandingImpulse);
+	Settings.MaximumLandingImpulse = FMath::Max(
+		Settings.MinimumLandingImpulse,
+		Settings.MaximumLandingImpulse);
+	Settings.JumpLandingImpulseCenterPlankWeight = FMath::Max(
+		0.01f,
+		Settings.JumpLandingImpulseCenterPlankWeight);
+	Settings.JumpLandingImpulseAdjacentPlankWeight = FMath::Max(
+		0.0f,
+		Settings.JumpLandingImpulseAdjacentPlankWeight);
 	Settings.CharacterTrackingHeight = FMath::Max(100.0f, Settings.CharacterTrackingHeight);
 	Settings.Swing1LimitDegrees = FMath::Clamp(Settings.Swing1LimitDegrees, 0.0f, 90.0f);
 	Settings.Swing2LimitDegrees = FMath::Clamp(Settings.Swing2LimitDegrees, 0.0f, 90.0f);
@@ -355,7 +432,10 @@ FWorldRopeBridgeSettings AWorldRopeBridge::GetResolvedBridgeSettings() const
 void AWorldRopeBridge::RebuildBridge()
 {
 	const FWorldRopeBridgeSettings Settings = GetResolvedBridgeSettings();
-	const int64 ConstraintCount = static_cast<int64>(Settings.PlankCount) + 3;
+	const int64 InternalConstraintCount =
+		(Settings.bUseDualSideInternalConstraints ? 2 : 1) *
+		(static_cast<int64>(Settings.PlankCount) - 1);
+	const int64 ConstraintCount = InternalConstraintCount + BridgeAnchorCount;
 	if (ConstraintCount > MAX_int32)
 	{
 		UE_LOG(
@@ -417,20 +497,45 @@ void AWorldRopeBridge::RebuildBridge()
 			static_cast<float>(Settings.PlankCount - 1);
 		const float X = FMath::Lerp(-Span * 0.5f, Span * 0.5f, Alpha);
 		const float Z = DeckCenterZ + CalculateSagHeight(Alpha, Sag);
-		const float Slope = Span > UE_KINDA_SMALL_NUMBER
-			? (-4.0f * Sag * (1.0f - 2.0f * Alpha)) / Span
-			: 0.0f;
+		RestPlankLocations.Add(FVector(X, 0.0f, Z));
+	}
+
+	for (int32 Index = 0; Index < Settings.PlankCount; ++Index)
+	{
+		FVector Tangent;
+		if (Index == 0)
+		{
+			const FVector LeftAnchor =
+				(AnchorLocations[0] + AnchorLocations[1]) * 0.5f;
+			const FVector RightJoint =
+				(RestPlankLocations[0] + RestPlankLocations[1]) * 0.5f;
+			Tangent = RightJoint - LeftAnchor;
+		}
+		else if (Index + 1 == Settings.PlankCount)
+		{
+			const FVector LeftJoint =
+				(RestPlankLocations[Index - 1] + RestPlankLocations[Index]) * 0.5f;
+			const FVector RightAnchor =
+				(AnchorLocations[2] + AnchorLocations[3]) * 0.5f;
+			Tangent = RightAnchor - LeftJoint;
+		}
+		else
+		{
+			Tangent = RestPlankLocations[Index + 1] - RestPlankLocations[Index - 1];
+		}
+
 		const FQuat BaseRotation(FVector::UpVector, -HALF_PI);
-		const FQuat SlopeRotation(FVector::RightVector, FMath::Atan(Slope));
+		const FQuat SlopeRotation(
+			FVector::RightVector,
+			-FMath::Atan2(Tangent.Z, Tangent.X));
 		const FTransform PlankTransform(
 			SlopeRotation * BaseRotation,
-			FVector(X, 0.0f, Z),
+			RestPlankLocations[Index],
 			FVector(
 				Settings.PlankWidth / 100.0f,
 				Settings.PlankDepth / 100.0f,
 				Settings.PlankHeight / 100.0f));
 		GeneratedPlanks.Add(CreatePlank(Index, PlankTransform, Settings));
-		RestPlankLocations.Add(PlankTransform.GetLocation());
 	}
 
 	RestAdjacentPlankDistances.Reserve(Settings.PlankCount - 1);
@@ -461,12 +566,43 @@ void AWorldRopeBridge::RebuildBridge()
 		1));
 	for (int32 Index = 0; Index + 1 < GeneratedPlanks.Num(); ++Index)
 	{
-		GeneratedConstraints.Add(CreateConstraint(
-			FString::Printf(TEXT("Constraint_%02d_%02d"), Index, Index + 1),
-			GeneratedPlanks[Index + 1],
-			GeneratedPlanks[Index],
-			(RestPlankLocations[Index] + RestPlankLocations[Index + 1]) * 0.5f,
-			Settings));
+		const FVector JointCenter =
+			(RestPlankLocations[Index] + RestPlankLocations[Index + 1]) * 0.5f;
+		if (Settings.bUseDualSideInternalConstraints)
+		{
+			const float JointLateralOffset = FMath::Max(
+				0.0f,
+				Settings.PlankWidth * 0.5f - Settings.AnchorLateralInset);
+			GeneratedConstraints.Add(CreateConstraint(
+				FString::Printf(
+					TEXT("Constraint_%02d_%02d_NegativeY"),
+					Index,
+					Index + 1),
+				GeneratedPlanks[Index + 1],
+				GeneratedPlanks[Index],
+				JointCenter + FVector(0.0f, -JointLateralOffset, 0.0f),
+				Settings));
+			GeneratedConstraints.Add(CreateConstraint(
+				FString::Printf(
+					TEXT("Constraint_%02d_%02d_PositiveY"),
+					Index,
+					Index + 1),
+				GeneratedPlanks[Index + 1],
+				GeneratedPlanks[Index],
+				JointCenter + FVector(0.0f, JointLateralOffset, 0.0f),
+				Settings,
+				false,
+				true));
+		}
+		else
+		{
+			GeneratedConstraints.Add(CreateConstraint(
+				FString::Printf(TEXT("Constraint_%02d_%02d"), Index, Index + 1),
+				GeneratedPlanks[Index + 1],
+				GeneratedPlanks[Index],
+				JointCenter,
+				Settings));
+		}
 	}
 	GeneratedConstraints.Add(CreateConstraint(
 		TEXT("Constraint_RightAnchor_NegativeY"),
@@ -496,6 +632,8 @@ void AWorldRopeBridge::ClearGeneratedComponents()
 	RestPlankLocations.Reset();
 	RestAnchorLocations.Reset();
 	RestAdjacentPlankDistances.Reset();
+	bUnloadedRecoveryArmed = false;
+	UnloadedRecoveryElapsed = 0.0f;
 
 	TInlineComponentArray<UActorComponent*> Components(this);
 	for (UActorComponent* Component : Components)
@@ -578,6 +716,171 @@ void AWorldRopeBridge::RebuildRestState(const FWorldRopeBridgeSettings& Settings
 	}
 }
 
+void AWorldRopeBridge::UpdateUnloadedRecovery(
+	const float DeltaSeconds,
+	const bool bAnyBridgeInteraction,
+	const FWorldRopeBridgeSettings& Settings)
+{
+	if (!Settings.bEnableUnloadedAngularRecovery)
+	{
+		bUnloadedRecoveryArmed = false;
+		UnloadedRecoveryElapsed = 0.0f;
+		return;
+	}
+	if (bAnyBridgeInteraction)
+	{
+		bUnloadedRecoveryArmed = true;
+		UnloadedRecoveryElapsed = 0.0f;
+		return;
+	}
+	if (!bUnloadedRecoveryArmed)
+	{
+		UnloadedRecoveryElapsed = 0.0f;
+		return;
+	}
+
+	UnloadedRecoveryElapsed += FMath::Max(0.0f, DeltaSeconds);
+	if (UnloadedRecoveryElapsed < Settings.UnloadedRecoveryDelay)
+	{
+		return;
+	}
+
+	const float BlendElapsed = UnloadedRecoveryElapsed - Settings.UnloadedRecoveryDelay;
+	const float DriveAlpha = Settings.UnloadedRecoveryBlendInTime > UE_KINDA_SMALL_NUMBER
+		? FMath::Clamp(BlendElapsed / Settings.UnloadedRecoveryBlendInTime, 0.0f, 1.0f)
+		: 1.0f;
+	ApplyUnloadedRecoveryTorque(DriveAlpha, Settings);
+
+	if (DriveAlpha >= 1.0f &&
+		GetMaximumPlankRestAngularErrorDegrees() <=
+			Settings.UnloadedRecoveryRestToleranceDegrees &&
+		GetMaximumPlankAngularSpeedDegrees() <=
+			Settings.UnloadedRecoveryStopAngularSpeedDegrees)
+	{
+		for (UStaticMeshComponent* Plank : GeneratedPlanks)
+		{
+			if (IsValid(Plank) && Plank->IsSimulatingPhysics())
+			{
+				Plank->PutRigidBodyToSleep();
+			}
+		}
+		bUnloadedRecoveryArmed = false;
+		UnloadedRecoveryElapsed = 0.0f;
+	}
+}
+
+void AWorldRopeBridge::ApplyUnloadedRecoveryTorque(
+	const float Alpha,
+	const FWorldRopeBridgeSettings& Settings)
+{
+	const float ClampedAlpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
+	if (ClampedAlpha <= UE_KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	for (int32 Index = 0; Index < GeneratedPlanks.Num(); ++Index)
+	{
+		UStaticMeshComponent* Plank = GeneratedPlanks[Index];
+		if (!IsValid(Plank) || !Plank->IsSimulatingPhysics())
+		{
+			continue;
+		}
+
+		const FQuat TargetRotation = GetNaturalRestRotationForPlank(Index);
+		FQuat RotationError = TargetRotation * Plank->GetComponentQuat().Inverse();
+		RotationError.Normalize();
+		if (RotationError.W < 0.0f)
+		{
+			RotationError.X *= -1.0f;
+			RotationError.Y *= -1.0f;
+			RotationError.Z *= -1.0f;
+			RotationError.W *= -1.0f;
+		}
+
+		FVector ErrorAxis = FVector::ZeroVector;
+		float ErrorAngle = 0.0f;
+		RotationError.ToAxisAndAngle(ErrorAxis, ErrorAngle);
+		if (!ErrorAxis.IsNormalized() || !FMath::IsFinite(ErrorAngle))
+		{
+			continue;
+		}
+
+		FVector AngularAcceleration =
+			ErrorAxis * ErrorAngle * Settings.UnloadedRecoveryAngularStiffness -
+			Plank->GetPhysicsAngularVelocityInRadians() *
+				Settings.UnloadedRecoveryAngularDamping;
+		AngularAcceleration *= ClampedAlpha;
+		if (Settings.UnloadedRecoveryAngularForceLimit > 0.0f)
+		{
+			AngularAcceleration = AngularAcceleration.GetClampedToMaxSize(
+				Settings.UnloadedRecoveryAngularForceLimit);
+		}
+		Plank->AddTorqueInRadians(AngularAcceleration, NAME_None, true);
+	}
+}
+
+FQuat AWorldRopeBridge::GetNaturalRestRotationForPlank(const int32 Index) const
+{
+	const UStaticMeshComponent* Plank = GetPlankComponent(Index);
+	if (!IsValid(Plank) || GeneratedPlanks.Num() < 2 ||
+		RestAnchorLocations.Num() < BridgeAnchorCount)
+	{
+		return IsValid(Plank) ? Plank->GetComponentQuat() : GetActorQuat();
+	}
+
+	FVector WorldTangent;
+	if (Index == 0)
+	{
+		const UStaticMeshComponent* NextPlank = GeneratedPlanks[1];
+		if (!IsValid(NextPlank))
+		{
+			return Plank->GetComponentQuat();
+		}
+		const FVector LeftAnchor = GetActorTransform().TransformPosition(
+			(RestAnchorLocations[0] + RestAnchorLocations[1]) * 0.5f);
+		const FVector RightJoint =
+			(Plank->GetComponentLocation() + NextPlank->GetComponentLocation()) * 0.5f;
+		WorldTangent = RightJoint - LeftAnchor;
+	}
+	else if (Index + 1 == GeneratedPlanks.Num())
+	{
+		const UStaticMeshComponent* PreviousPlank = GeneratedPlanks[Index - 1];
+		if (!IsValid(PreviousPlank))
+		{
+			return Plank->GetComponentQuat();
+		}
+		const FVector LeftJoint =
+			(PreviousPlank->GetComponentLocation() + Plank->GetComponentLocation()) * 0.5f;
+		const FVector RightAnchor = GetActorTransform().TransformPosition(
+			(RestAnchorLocations[2] + RestAnchorLocations[3]) * 0.5f);
+		WorldTangent = RightAnchor - LeftJoint;
+	}
+	else
+	{
+		const UStaticMeshComponent* PreviousPlank = GeneratedPlanks[Index - 1];
+		const UStaticMeshComponent* NextPlank = GeneratedPlanks[Index + 1];
+		if (!IsValid(PreviousPlank) || !IsValid(NextPlank))
+		{
+			return Plank->GetComponentQuat();
+		}
+		WorldTangent =
+			NextPlank->GetComponentLocation() - PreviousPlank->GetComponentLocation();
+	}
+
+	const FVector LocalTangent = GetActorTransform().InverseTransformVectorNoScale(
+		WorldTangent);
+	if (FMath::IsNearlyZero(LocalTangent.X) && FMath::IsNearlyZero(LocalTangent.Z))
+	{
+		return Plank->GetComponentQuat();
+	}
+
+	const float SlopeAngle = -FMath::Atan2(LocalTangent.Z, LocalTangent.X);
+	const FQuat BaseRotation(FVector::UpVector, -HALF_PI);
+	const FQuat SlopeRotation(FVector::RightVector, SlopeAngle);
+	return (GetActorQuat() * SlopeRotation * BaseRotation).GetNormalized();
+}
+
 UStaticMeshComponent* AWorldRopeBridge::CreatePlank(
 	const int32 Index,
 	const FTransform& RelativeTransform,
@@ -634,7 +937,7 @@ UPhysicsConstraintComponent* AWorldRopeBridge::CreateConstraint(
 	const FVector& RelativeLocation,
 	const FWorldRopeBridgeSettings& Settings,
 	const bool bEndpointAnchor,
-	const bool bSecondaryAnchor,
+	const bool bSecondaryConstraint,
 	const int32 AnchorIndex)
 {
 	const FName ComponentName = MakeUniqueObjectName(
@@ -650,7 +953,7 @@ UPhysicsConstraintComponent* AWorldRopeBridge::CreateConstraint(
 	if (bEndpointAnchor)
 	{
 		Constraint->ComponentTags.Add(
-			bSecondaryAnchor
+			bSecondaryConstraint
 				? SecondaryAnchorConstraintTag
 				: PrimaryAnchorConstraintTag);
 		if (AnchorIndex >= 0 && AnchorIndex < BridgeAnchorCount)
@@ -658,9 +961,16 @@ UPhysicsConstraintComponent* AWorldRopeBridge::CreateConstraint(
 			Constraint->ComponentTags.Add(AnchorConstraintTags[AnchorIndex]);
 		}
 	}
+	else if (Settings.bUseDualSideInternalConstraints)
+	{
+		Constraint->ComponentTags.Add(
+			bSecondaryConstraint
+				? InternalPositiveYConstraintTag
+				: InternalNegativeYConstraintTag);
+	}
 	Constraint->SetupAttachment(SceneRoot);
-	// Local X=Up, Y=bridge direction, Z=plank width. This maps Swing1 to
-	// fore/aft pitch and Swing2 to side roll while Twist locks horizontal yaw.
+	// Local X=Up, Y=bridge direction, Z=plank width. Swing1 is fore/aft pitch;
+	// the second lateral joint stabilizes roll/yaw through its linear frame.
 	const FRotator ConstraintRotation = FRotationMatrix::MakeFromXY(
 		FVector::UpVector,
 		FVector::ForwardVector).Rotator();
@@ -669,9 +979,9 @@ UPhysicsConstraintComponent* AWorldRopeBridge::CreateConstraint(
 	Constraint->SetLinearXLimit(LCM_Locked, 0.0f);
 	Constraint->SetLinearYLimit(LCM_Locked, 0.0f);
 	Constraint->SetLinearZLimit(
-		bSecondaryAnchor ? LCM_Free : LCM_Locked,
+		bSecondaryConstraint ? LCM_Free : LCM_Locked,
 		0.0f);
-	if (bSecondaryAnchor)
+	if (bSecondaryConstraint)
 	{
 		Constraint->SetAngularSwing1Limit(ACM_Free, 0.0f);
 		Constraint->SetAngularSwing2Limit(ACM_Free, 0.0f);
@@ -683,10 +993,18 @@ UPhysicsConstraintComponent* AWorldRopeBridge::CreateConstraint(
 		Constraint->SetAngularSwing2Limit(ACM_Free, 0.0f);
 		Constraint->SetAngularTwistLimit(ACM_Free, 0.0f);
 	}
+	else if (Settings.bUseDualSideInternalConstraints)
+	{
+		Constraint->SetAngularSwing1Limit(ACM_Limited, Settings.Swing1LimitDegrees);
+		Constraint->SetAngularSwing2Limit(ACM_Free, 0.0f);
+		Constraint->SetAngularTwistLimit(ACM_Free, 0.0f);
+	}
 	else
 	{
 		Constraint->SetAngularSwing1Limit(ACM_Limited, Settings.Swing1LimitDegrees);
-		Constraint->SetAngularSwing2Limit(ACM_Limited, Settings.Swing2LimitDegrees);
+		Constraint->SetAngularSwing2Limit(
+			Settings.Swing2LimitDegrees > UE_KINDA_SMALL_NUMBER ? ACM_Limited : ACM_Locked,
+			Settings.Swing2LimitDegrees);
 		Constraint->SetAngularTwistLimit(
 			Settings.TwistLimitDegrees > UE_KINDA_SMALL_NUMBER ? ACM_Limited : ACM_Locked,
 			Settings.TwistLimitDegrees);
@@ -694,8 +1012,8 @@ UPhysicsConstraintComponent* AWorldRopeBridge::CreateConstraint(
 	Constraint->SetDisableCollision(true);
 	Constraint->SetLinearBreakable(false, 0.0f);
 	Constraint->SetAngularBreakable(false, 0.0f);
-	Constraint->SetProjectionEnabled(!bSecondaryAnchor);
-	if (!bSecondaryAnchor)
+	Constraint->SetProjectionEnabled(!bSecondaryConstraint);
+	if (!bSecondaryConstraint)
 	{
 		Constraint->SetProjectionParams(
 			Settings.ProjectionLinearAlpha,
@@ -756,14 +1074,21 @@ int32 AWorldRopeBridge::GetValidSupportCount() const
 bool AWorldRopeBridge::HasValidConstraintConfiguration() const
 {
 	const FWorldRopeBridgeSettings Settings = GetResolvedBridgeSettings();
+	const int64 ExpectedInternalConstraintCount =
+		(Settings.bUseDualSideInternalConstraints ? 2 : 1) *
+		(static_cast<int64>(GeneratedPlanks.Num()) - 1);
+	const int64 ExpectedConstraintCount =
+		ExpectedInternalConstraintCount + BridgeAnchorCount;
 	if (GeneratedPlanks.Num() < 2 ||
 		static_cast<int64>(GeneratedConstraints.Num()) !=
-		static_cast<int64>(GeneratedPlanks.Num()) + 3 ||
+		ExpectedConstraintCount ||
 		GetValidSupportCount() != BridgeAnchorCount)
 	{
 		return false;
 	}
 	int32 InternalConstraintCount = 0;
+	int32 InternalNegativeYConstraintCount = 0;
+	int32 InternalPositiveYConstraintCount = 0;
 	int32 PrimaryAnchorCount = 0;
 	int32 SecondaryAnchorCount = 0;
 	int32 AnchorTagCounts[BridgeAnchorCount] = {};
@@ -777,11 +1102,24 @@ bool AWorldRopeBridge::HasValidConstraintConfiguration() const
 			Constraint->ComponentTags.Contains(PrimaryAnchorConstraintTag);
 		const bool bSecondaryAnchor =
 			Constraint->ComponentTags.Contains(SecondaryAnchorConstraintTag);
+		const bool bInternalNegativeY =
+			Constraint->ComponentTags.Contains(InternalNegativeYConstraintTag);
+		const bool bInternalPositiveY =
+			Constraint->ComponentTags.Contains(InternalPositiveYConstraintTag);
 		if (bPrimaryAnchor && bSecondaryAnchor)
 		{
 			return false;
 		}
 		const bool bEndpointAnchor = bPrimaryAnchor || bSecondaryAnchor;
+		if ((bInternalNegativeY && bInternalPositiveY) ||
+			(bEndpointAnchor && (bInternalNegativeY || bInternalPositiveY)) ||
+			(Settings.bUseDualSideInternalConstraints
+				? (!bEndpointAnchor && !bInternalNegativeY && !bInternalPositiveY)
+				: (bInternalNegativeY || bInternalPositiveY)))
+		{
+			return false;
+		}
+		const bool bSecondaryConstraint = bSecondaryAnchor || bInternalPositiveY;
 		int32 AnchorIndex = INDEX_NONE;
 		for (int32 CandidateIndex = 0; CandidateIndex < BridgeAnchorCount; ++CandidateIndex)
 		{
@@ -838,35 +1176,54 @@ bool AWorldRopeBridge::HasValidConstraintConfiguration() const
 			}
 		}
 		InternalConstraintCount += !bEndpointAnchor ? 1 : 0;
+		InternalNegativeYConstraintCount += bInternalNegativeY ? 1 : 0;
+		InternalPositiveYConstraintCount += bInternalPositiveY ? 1 : 0;
 		PrimaryAnchorCount += bPrimaryAnchor ? 1 : 0;
 		SecondaryAnchorCount += bSecondaryAnchor ? 1 : 0;
 		const EAngularConstraintMotion ExpectedTwistMotion =
-			Settings.TwistLimitDegrees > UE_KINDA_SMALL_NUMBER ? ACM_Limited : ACM_Locked;
+			bEndpointAnchor || Settings.bUseDualSideInternalConstraints
+				? ACM_Free
+				: (Settings.TwistLimitDegrees > UE_KINDA_SMALL_NUMBER
+					? ACM_Limited
+					: ACM_Locked);
+		const EAngularConstraintMotion ExpectedSwing2Motion =
+			bEndpointAnchor || Settings.bUseDualSideInternalConstraints
+				? ACM_Free
+				: (Settings.Swing2LimitDegrees > UE_KINDA_SMALL_NUMBER
+					? ACM_Limited
+					: ACM_Locked);
 		if (Constraint->ConstraintInstance.GetLinearXMotion() != LCM_Locked ||
 			Constraint->ConstraintInstance.GetLinearYMotion() != LCM_Locked ||
 			Constraint->ConstraintInstance.GetLinearZMotion() !=
-				(bSecondaryAnchor ? LCM_Free : LCM_Locked) ||
+				(bSecondaryConstraint ? LCM_Free : LCM_Locked) ||
 			Constraint->ConstraintInstance.GetAngularSwing1Motion() !=
-				(bSecondaryAnchor ? ACM_Free : ACM_Limited) ||
+				(bSecondaryConstraint ? ACM_Free : ACM_Limited) ||
 			Constraint->ConstraintInstance.GetAngularSwing2Motion() !=
-				(bEndpointAnchor ? ACM_Free : ACM_Limited) ||
+				(bSecondaryConstraint ? ACM_Free : ExpectedSwing2Motion) ||
 			Constraint->ConstraintInstance.GetAngularTwistMotion() !=
-				(bEndpointAnchor ? ACM_Free : ExpectedTwistMotion) ||
-			(!bSecondaryAnchor && !FMath::IsNearlyEqual(
+				(bSecondaryConstraint ? ACM_Free : ExpectedTwistMotion) ||
+			(!bSecondaryConstraint && !FMath::IsNearlyEqual(
 				Constraint->ConstraintInstance.GetAngularSwing1Limit(),
 				Settings.Swing1LimitDegrees,
 				0.01f)) ||
-			(!bEndpointAnchor && !FMath::IsNearlyEqual(
-				Constraint->ConstraintInstance.GetAngularSwing2Limit(),
-				Settings.Swing2LimitDegrees,
-				0.01f)) ||
+			(!bSecondaryConstraint && ExpectedSwing2Motion == ACM_Limited &&
+				!FMath::IsNearlyEqual(
+					Constraint->ConstraintInstance.GetAngularSwing2Limit(),
+					Settings.Swing2LimitDegrees,
+					0.01f)) ||
 			!Constraint->ConstraintInstance.IsCollisionDisabled() ||
-			Constraint->ConstraintInstance.IsProjectionEnabled() == bSecondaryAnchor)
+			Constraint->ConstraintInstance.IsProjectionEnabled() == bSecondaryConstraint)
 		{
 			return false;
 		}
 	}
-	if (InternalConstraintCount != GeneratedPlanks.Num() - 1 ||
+	const int32 ExpectedSideConstraintCount = GeneratedPlanks.Num() - 1;
+	if (InternalConstraintCount != ExpectedInternalConstraintCount ||
+		(Settings.bUseDualSideInternalConstraints
+			? (InternalNegativeYConstraintCount != ExpectedSideConstraintCount ||
+				InternalPositiveYConstraintCount != ExpectedSideConstraintCount)
+			: (InternalNegativeYConstraintCount != 0 ||
+				InternalPositiveYConstraintCount != 0)) ||
 		PrimaryAnchorCount != 2 || SecondaryAnchorCount != 2)
 	{
 		return false;
@@ -907,6 +1264,39 @@ float AWorldRopeBridge::GetMaximumPlankAngularSpeedDegrees() const
 		}
 	}
 	return MaximumSpeed;
+}
+
+float AWorldRopeBridge::GetMaximumPlankRestAngularErrorDegrees() const
+{
+	if (GeneratedPlanks.IsEmpty())
+	{
+		return TNumericLimits<float>::Max();
+	}
+
+	float MaximumError = 0.0f;
+	for (int32 Index = 0; Index < GeneratedPlanks.Num(); ++Index)
+	{
+		MaximumError = FMath::Max(MaximumError, GetPlankRestAngularErrorDegrees(Index));
+	}
+	return MaximumError;
+}
+
+float AWorldRopeBridge::GetPlankRestAngularErrorDegrees(const int32 Index) const
+{
+	const UStaticMeshComponent* Plank = GetPlankComponent(Index);
+	if (!IsValid(Plank))
+	{
+		return TNumericLimits<float>::Max();
+	}
+
+	return FMath::RadiansToDegrees(
+		GetNaturalRestRotationForPlank(Index).AngularDistance(
+			Plank->GetComponentQuat()));
+}
+
+FRotator AWorldRopeBridge::GetPlankNaturalRestRotation(const int32 Index) const
+{
+	return GetNaturalRestRotationForPlank(Index).Rotator();
 }
 
 float AWorldRopeBridge::GetMaximumEndpointPositionError() const
@@ -972,6 +1362,8 @@ bool AWorldRopeBridge::ApplyImpulseToCenterPlank(const FVector& WorldImpulse)
 	{
 		return false;
 	}
+	bUnloadedRecoveryArmed = true;
+	UnloadedRecoveryElapsed = 0.0f;
 	CenterPlank->AddImpulseAtLocation(WorldImpulse, CenterPlank->GetComponentLocation());
 	return true;
 }
@@ -1003,9 +1395,64 @@ void AWorldRopeBridge::ApplyCharacterImpulse(
 	Plank->AddImpulseAtLocation(FVector::DownVector * Magnitude, ImpulseLocation);
 }
 
+int32 AWorldRopeBridge::ApplyDistributedVerticalCharacterImpulse(
+	UStaticMeshComponent* CenterPlank,
+	const float Magnitude,
+	const FWorldRopeBridgeSettings& Settings)
+{
+	if (!IsValid(CenterPlank) || !CenterPlank->IsSimulatingPhysics() ||
+		!FMath::IsFinite(Magnitude) || Magnitude <= 0.0f)
+	{
+		return 0;
+	}
+
+	const int32 CenterIndex = GeneratedPlanks.IndexOfByKey(CenterPlank);
+	if (CenterIndex == INDEX_NONE)
+	{
+		return 0;
+	}
+
+	UStaticMeshComponent* AffectedPlanks[3] = {nullptr, nullptr, nullptr};
+	float AffectedWeights[3] = {0.0f, 0.0f, 0.0f};
+	int32 AffectedCount = 0;
+	float TotalWeight = 0.0f;
+	auto AddAffectedPlank = [&](const int32 Index, const float Weight)
+	{
+		UStaticMeshComponent* Candidate = GetPlankComponent(Index);
+		if (!IsValid(Candidate) || !Candidate->IsSimulatingPhysics() || Weight <= 0.0f)
+		{
+			return;
+		}
+		AffectedPlanks[AffectedCount] = Candidate;
+		AffectedWeights[AffectedCount] = Weight;
+		++AffectedCount;
+		TotalWeight += Weight;
+	};
+
+	AddAffectedPlank(CenterIndex, Settings.JumpLandingImpulseCenterPlankWeight);
+	AddAffectedPlank(CenterIndex - 1, Settings.JumpLandingImpulseAdjacentPlankWeight);
+	AddAffectedPlank(CenterIndex + 1, Settings.JumpLandingImpulseAdjacentPlankWeight);
+	if (AffectedCount == 0 || TotalWeight <= UE_KINDA_SMALL_NUMBER)
+	{
+		return 0;
+	}
+
+	for (int32 Index = 0; Index < AffectedCount; ++Index)
+	{
+		const float NormalizedWeight = AffectedWeights[Index] / TotalWeight;
+		// AddImpulse applies through each rigid body's center of mass, so the load
+		// produces deck sag/pitch without injecting a lateral roll torque.
+		AffectedPlanks[Index]->AddImpulse(
+			FVector::DownVector * (Magnitude * NormalizedWeight));
+	}
+	return AffectedCount;
+}
+
 void AWorldRopeBridge::ResetCharacterResponseDebug()
 {
 	LastMovementImpulseMagnitude = 0.0f;
 	LastJumpTakeoffImpulseMagnitude = 0.0f;
+	LastJumpTakeoffImpulseAffectedPlankCount = 0;
 	LastLandingImpulseMagnitude = 0.0f;
+	LastLandingImpulseAffectedPlankCount = 0;
 }

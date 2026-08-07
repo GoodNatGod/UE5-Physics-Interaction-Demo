@@ -78,7 +78,7 @@ public:
 
 	bool TryBeginCombatMovementRestriction(int32 RequestId);
 	bool TransferCombatMovementRestriction(int32 PreviousRequestId, int32 NewRequestId);
-	void EndCombatMovementRestriction(int32 RequestId);
+	void EndCombatMovementRestriction(int32 RequestId, bool bRestorePhysicsPush = true);
 	bool StartCombatAttackAdvance(int32 RequestId, float Distance, float Duration);
 	void CancelCombatAttackAdvance(int32 RequestId);
 	void PlayCombatAttackImmediately(int32 RequestId);

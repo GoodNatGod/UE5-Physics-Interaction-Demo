@@ -377,7 +377,7 @@ void URoverCombatComponent::BeginAttackRecovery(const int32 RequestId)
 	if (CharacterOwner)
 	{
 		CharacterOwner->CancelCombatAttackAdvance(RequestId);
-		CharacterOwner->EndCombatMovementRestriction(RequestId);
+		CharacterOwner->EndCombatMovementRestriction(RequestId, false);
 	}
 }
 
@@ -392,7 +392,7 @@ void URoverCombatComponent::FinishAttack(const int32 RequestId)
 	if (CharacterOwner)
 	{
 		CharacterOwner->CancelCombatAttackAdvance(RequestId);
-		CharacterOwner->EndCombatMovementRestriction(RequestId);
+		CharacterOwner->EndCombatMovementRestriction(RequestId, false);
 	}
 }
 

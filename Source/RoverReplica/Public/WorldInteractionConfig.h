@@ -38,7 +38,7 @@ struct ROVERREPLICA_API FWorldRopeBridgeSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout", meta = (ClampMin = "0.0", Units = "cm"))
 	float AnchorExtension = 60.0f;
 
-	// Distance measured inward from each plank side to its left/right anchor point.
+	// Distance measured inward from each plank side to its endpoint and internal constraint lines.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout", meta = (ClampMin = "0.0", Units = "cm"))
 	float AnchorLateralInset = 15.0f;
 
@@ -61,6 +61,38 @@ struct ROVERREPLICA_API FWorldRopeBridgeSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics", meta = (ClampMin = "0.0"))
 	float AngularDamping = 4.0f;
 
+	// [PLACEHOLDER] Restores the unloaded bridge arc only after every interacting character leaves.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Recovery")
+	bool bEnableUnloadedAngularRecovery = true;
+
+	// [PLACEHOLDER] Keeps recovery from fighting a character who has just stepped or jumped off.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Recovery", meta = (ClampMin = "0.0", Units = "s"))
+	float UnloadedRecoveryDelay = 0.50f;
+
+	// [PLACEHOLDER] Blends the angular drive in instead of snapping the chain to its rest pose.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Recovery", meta = (ClampMin = "0.0", Units = "s"))
+	float UnloadedRecoveryBlendInTime = 1.00f;
+
+	// [PLACEHOLDER] Acceleration-mode angular correction strength for returning to the unloaded rest pose.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Recovery", meta = (ClampMin = "0.0"))
+	float UnloadedRecoveryAngularStiffness = 1200.0f;
+
+	// [PLACEHOLDER] Angular velocity damping used while the unloaded bridge returns to rest.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Recovery", meta = (ClampMin = "0.0"))
+	float UnloadedRecoveryAngularDamping = 75.0f;
+
+	// Maximum recovery angular acceleration; zero means unlimited.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Recovery", meta = (ClampMin = "0.0"))
+	float UnloadedRecoveryAngularForceLimit = 0.0f;
+
+	// [PLACEHOLDER] Recovery stops inside this angular error so the bridge can sleep naturally.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Recovery", meta = (ClampMin = "0.0", Units = "deg"))
+	float UnloadedRecoveryRestToleranceDegrees = 2.0f;
+
+	// [PLACEHOLDER] Recovery stops only after residual angular motion is also quiet.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Recovery", meta = (ClampMin = "0.0", Units = "deg/s"))
+	float UnloadedRecoveryStopAngularSpeedDegrees = 5.0f;
+
 	// [PLACEHOLDER] Horizontal movement becomes a periodic downward footstep impulse.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Movement", meta = (ClampMin = "0.0", Units = "cm/s"))
 	float MinimumMovementSpeed = 25.0f;
@@ -77,6 +109,10 @@ struct ROVERREPLICA_API FWorldRopeBridgeSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Movement", meta = (ClampMin = "0.05", Units = "s"))
 	float MovementImpulseInterval = 0.20f;
 
+	// Attack-advance Root Motion Sources are not footsteps and must not add periodic load impulses.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Movement")
+	bool bSuppressRootMotionMovementImpulses = true;
+
 	// [PLACEHOLDER] Ignores tiny vertical base changes that are not intentional jumps.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Jump", meta = (ClampMin = "0.0", Units = "cm/s"))
 	float MinimumJumpTakeoffSpeed = 120.0f;
@@ -85,9 +121,13 @@ struct ROVERREPLICA_API FWorldRopeBridgeSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Jump", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float JumpTakeoffImpulseScale = 0.004f;
 
+	// [PLACEHOLDER] Keeps an accepted jump visibly readable after its load is distributed across the deck.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Jump", meta = (ClampMin = "0.0"))
+	float MinimumJumpTakeoffImpulse = 800.0f;
+
 	// [PLACEHOLDER] Prevents extreme movement values from destabilizing the chain.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Jump", meta = (ClampMin = "0.0"))
-	float MaximumJumpTakeoffImpulse = 250.0f;
+	float MaximumJumpTakeoffImpulse = 1200.0f;
 
 	// [PLACEHOLDER] Only real falls create an additional landing impulse.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Landing", meta = (ClampMin = "0.0", Units = "cm/s"))
@@ -97,9 +137,21 @@ struct ROVERREPLICA_API FWorldRopeBridgeSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Landing", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float LandingImpulseScale = 0.006f;
 
+	// [PLACEHOLDER] Keeps qualifying landings stronger than takeoff while retaining a stable distributed load.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Landing", meta = (ClampMin = "0.0"))
+	float MinimumLandingImpulse = 2200.0f;
+
 	// [PLACEHOLDER] Caps hard landings so constraints cannot receive unbounded impulses.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Landing", meta = (ClampMin = "0.0"))
-	float MaximumLandingImpulse = 500.0f;
+	float MaximumLandingImpulse = 3200.0f;
+
+	// [PLACEHOLDER] Relative share for the supported plank. Active weights are normalized before use.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Jump and Landing", meta = (ClampMin = "0.01"))
+	float JumpLandingImpulseCenterPlankWeight = 0.60f;
+
+	// [PLACEHOLDER] Relative share for each valid plank immediately before/after the supported plank.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Jump and Landing", meta = (ClampMin = "0.0"))
+	float JumpLandingImpulseAdjacentPlankWeight = 0.20f;
 
 	// [PLACEHOLDER] Query volume height used to retain falling characters until landing.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Detection", meta = (ClampMin = "100.0", Units = "cm"))
@@ -113,6 +165,11 @@ struct ROVERREPLICA_API FWorldRopeBridgeSettings
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Constraint", meta = (ClampMin = "0.0", ClampMax = "90.0", Units = "deg"))
 	float TwistLimitDegrees = 0.0f;
+
+	// [PLACEHOLDER] Creates a primary and stabilization joint on opposite sides of every seam.
+	// Disable only when comparing against the legacy centerline-joint layout.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Constraint")
+	bool bUseDualSideInternalConstraints = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Constraint|Projection", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float ProjectionLinearAlpha = 0.15f;

@@ -99,9 +99,22 @@ def main():
     plank_depth = float(settings.get_editor_property("plank_depth"))
     plank_gap = float(settings.get_editor_property("plank_gap"))
     visible_length = float(plank_count - 1) * (plank_depth + plank_gap) + plank_depth
+    player_starts = [
+        actor
+        for actor in actor_subsystem.get_all_level_actors()
+        if isinstance(actor, unreal.PlayerStart)
+    ]
+    bridge_location = bridge.get_actor_location()
+    start_distance = (
+        (player_starts[0].get_actor_location() - bridge_location).length()
+        if player_starts
+        else -1.0
+    )
     unreal.log(
         "PHYSICS_WORLD_ROPE_BRIDGE_INSPECT_OK "
         f"actor={bridge.get_path_name()} "
+        f"location={bridge_location.x:.1f},{bridge_location.y:.1f},{bridge_location.z:.1f} "
+        f"player_start_distance={start_distance:.1f}cm "
         f"override={str(bool(bridge.get_editor_property('override_shared_settings'))).lower()} "
         f"planks={plank_count} "
         f"visible_length={visible_length:.1f}cm "
@@ -119,6 +132,21 @@ def main():
         f"mass={float(settings.get_editor_property('plank_mass_kg')):.1f}kg "
         f"damping={float(settings.get_editor_property('linear_damping')):.1f}/"
         f"{float(settings.get_editor_property('angular_damping')):.1f} "
+        f"movement_impulse="
+        f"{float(settings.get_editor_property('movement_impulse_at_reference_speed')):.1f}/"
+        f"{float(settings.get_editor_property('movement_impulse_interval')):.2f}s "
+        f"jump_load="
+        f"{float(settings.get_editor_property('minimum_jump_takeoff_speed')):.1f}/"
+        f"{float(settings.get_editor_property('jump_takeoff_impulse_scale')):.4f}/"
+        f"{float(settings.get_editor_property('maximum_jump_takeoff_impulse')):.1f} "
+        f"landing_load="
+        f"{float(settings.get_editor_property('minimum_landing_speed')):.1f}/"
+        f"{float(settings.get_editor_property('landing_impulse_scale')):.4f}/"
+        f"{float(settings.get_editor_property('maximum_landing_impulse')):.1f} "
+        f"recovery="
+        f"{float(settings.get_editor_property('unloaded_recovery_delay')):.2f}s/"
+        f"{float(settings.get_editor_property('unloaded_recovery_angular_stiffness')):.1f}/"
+        f"{float(settings.get_editor_property('unloaded_recovery_angular_damping')):.1f} "
         f"swing={float(settings.get_editor_property('swing1_limit_degrees')):.1f}/"
         f"{float(settings.get_editor_property('swing2_limit_degrees')):.1f}/"
         f"{float(settings.get_editor_property('twist_limit_degrees')):.1f} "
@@ -133,6 +161,8 @@ def main():
         f"secondary_projection_off={secondary_projection_off}/"
         f"{len(secondary_anchor_constraints)} "
         f"anchor_frame_error={max(frame_errors, default=0.0):.3f}cm "
+        f"rest_angular_error="
+        f"{float(bridge.get_maximum_plank_rest_angular_error_degrees()):.2f}deg "
         f"generated_planks={bridge.get_generated_plank_count()} "
         f"constraints={constraint_count}"
     )

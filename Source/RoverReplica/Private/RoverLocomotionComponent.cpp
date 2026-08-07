@@ -1,10 +1,34 @@
 #include "RoverLocomotionComponent.h"
 
+#include "RoverRootMotionSourceNames.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/RootMotionSource.h"
+
+namespace
+{
+bool IsCharacterOnSimulatedBase(
+	const ACharacter* Character,
+	const UCharacterMovementComponent* Movement)
+{
+	if (!Character || !Movement)
+	{
+		return false;
+	}
+
+	const FBasedMovementInfo& BasedMovement = Character->GetBasedMovement();
+	if (MovementBaseUtility::IsSimulatedBase(&BasedMovement.MovementBaseInterfaceData))
+	{
+		return true;
+	}
+
+	const UPrimitiveComponent* MovementBase =
+		Cast<UPrimitiveComponent>(Character->GetMovementBaseObject());
+	return IsValid(MovementBase) && MovementBase->IsSimulatingPhysics();
+}
+}
 
 URoverLocomotionComponent::URoverLocomotionComponent()
 {
@@ -44,6 +68,7 @@ void URoverLocomotionComponent::TickComponent(
 	{
 		return;
 	}
+	UpdateCombatPhysicsPushRestore(DeltaTime);
 
 	if (CharacterMovement->IsFalling() && CharacterOwner->GetVelocity().Z < 0.0f)
 	{
@@ -203,7 +228,7 @@ void URoverLocomotionComponent::SetCrouchHeld(const bool bHeld)
 
 bool URoverLocomotionComponent::TryBeginCombatMovementRestriction(const int32 RequestId)
 {
-	if (RequestId <= 0 || !CharacterMovement ||
+	if (RequestId <= 0 || !CharacterOwner || !CharacterMovement ||
 		!CharacterMovement->IsMovingOnGround() ||
 		LandingType == ERoverLandingType::Heavy ||
 		LandingType == ERoverLandingType::Roll ||
@@ -220,6 +245,10 @@ bool URoverLocomotionComponent::TryBeginCombatMovementRestriction(const int32 Re
 		LandingStateRemaining = 0.0f;
 	}
 	CombatMovementRestrictionRequestId = RequestId;
+	if (IsCharacterOnSimulatedBase(CharacterOwner, CharacterMovement))
+	{
+		ApplyCombatPhysicsPushScale(RequestId);
+	}
 	return true;
 }
 
@@ -234,15 +263,25 @@ bool URoverLocomotionComponent::TransferCombatMovementRestriction(
 	}
 
 	CombatMovementRestrictionRequestId = NewRequestId;
+	if (CombatPhysicsPushScaleRequestId == PreviousRequestId)
+	{
+		CombatPhysicsPushScaleRequestId = NewRequestId;
+	}
 	return true;
 }
 
-void URoverLocomotionComponent::EndCombatMovementRestriction(const int32 RequestId)
+void URoverLocomotionComponent::EndCombatMovementRestriction(
+	const int32 RequestId,
+	const bool bRestorePhysicsPush)
 {
 	if (RequestId > 0 && RequestId == CombatMovementRestrictionRequestId)
 	{
 		CancelCombatAttackAdvance(RequestId);
 		CombatMovementRestrictionRequestId = 0;
+	}
+	if (bRestorePhysicsPush)
+	{
+		RestoreCombatPhysicsPushScale(RequestId);
 	}
 }
 
@@ -257,8 +296,29 @@ bool URoverLocomotionComponent::StartCombatAttackAdvance(
 		return false;
 	}
 
-	CancelCombatAttackAdvance(CombatAttackAdvanceRequestId);
-	if (Distance <= UE_KINDA_SMALL_NUMBER || Duration <= UE_KINDA_SMALL_NUMBER)
+	const int32 PreviousAttackMovementRequestId = CombatAttackAdvanceRequestId > 0
+		? CombatAttackAdvanceRequestId
+		: CombatPhysicsPushScaleRequestId;
+	CancelCombatAttackAdvance(PreviousAttackMovementRequestId);
+	float ResolvedDistance = FMath::Max(0.0f, Distance);
+	// The animated start notify can arrive after a one-frame movement-base transition.
+	// Preserve the classification captured when this attack request was accepted.
+	const bool bIsOnSimulatedBase =
+		CombatPhysicsPushScaleRequestId == RequestId ||
+		IsCharacterOnSimulatedBase(CharacterOwner, CharacterMovement);
+	if (bIsOnSimulatedBase)
+	{
+		ApplyCombatPhysicsPushScale(RequestId);
+		ResolvedDistance *= FMath::Clamp(
+			GetSettings().AttackAdvanceScaleOnSimulatedBase,
+			0.0f,
+			1.0f);
+	}
+	if (Duration <= UE_KINDA_SMALL_NUMBER)
+	{
+		return true;
+	}
+	if (ResolvedDistance <= UE_KINDA_SMALL_NUMBER)
 	{
 		return true;
 	}
@@ -271,12 +331,12 @@ bool URoverLocomotionComponent::StartCombatAttackAdvance(
 	}
 
 	TSharedPtr<FRootMotionSource_MoveToForce> MoveToSource = MakeShared<FRootMotionSource_MoveToForce>();
-	MoveToSource->InstanceName = FName(*FString::Printf(TEXT("RoverAttackAdvance_%d"), RequestId));
+	MoveToSource->InstanceName = RoverRootMotionSourceNames::CombatAttackAdvance();
 	MoveToSource->Priority = 1000;
 	MoveToSource->AccumulateMode = ERootMotionAccumulateMode::Override;
 	MoveToSource->Duration = FMath::Max(0.05f, Duration);
 	MoveToSource->StartLocation = StartLocation;
-	MoveToSource->TargetLocation = StartLocation + AdvanceDirection * FMath::Max(0.0f, Distance);
+	MoveToSource->TargetLocation = StartLocation + AdvanceDirection * ResolvedDistance;
 	MoveToSource->bRestrictSpeedToExpected = true;
 	MoveToSource->FinishVelocityParams.Mode = ERootMotionFinishVelocityMode::ClampVelocity;
 	MoveToSource->FinishVelocityParams.ClampVelocity = GetMaxSpeedForGait(Gait);
@@ -294,17 +354,134 @@ bool URoverLocomotionComponent::StartCombatAttackAdvance(
 
 void URoverLocomotionComponent::CancelCombatAttackAdvance(const int32 RequestId)
 {
-	if (RequestId <= 0 || RequestId != CombatAttackAdvanceRequestId)
+	if (RequestId <= 0 ||
+		(RequestId != CombatAttackAdvanceRequestId &&
+			RequestId != CombatPhysicsPushScaleRequestId))
 	{
 		return;
 	}
-	if (CharacterMovement &&
+	if (RequestId == CombatAttackAdvanceRequestId && CharacterMovement &&
 		CombatAttackRootMotionSourceId != static_cast<uint16>(ERootMotionSourceID::Invalid))
 	{
 		CharacterMovement->RemoveRootMotionSourceByID(CombatAttackRootMotionSourceId);
 	}
-	CombatAttackAdvanceRequestId = 0;
-	CombatAttackRootMotionSourceId = static_cast<uint16>(ERootMotionSourceID::Invalid);
+	if (RequestId == CombatAttackAdvanceRequestId)
+	{
+		CombatAttackAdvanceRequestId = 0;
+		CombatAttackRootMotionSourceId = static_cast<uint16>(ERootMotionSourceID::Invalid);
+	}
+}
+
+void URoverLocomotionComponent::ApplyCombatPhysicsPushScale(const int32 RequestId)
+{
+	if (RequestId <= 0 || !CharacterMovement)
+	{
+		return;
+	}
+	if (RequestId == CombatPhysicsPushScaleRequestId)
+	{
+		return;
+	}
+
+	const bool bHasCachedOriginalValues =
+		CombatPhysicsPushScaleRequestId > 0 || bCombatPhysicsRestoreActive;
+	if (!bHasCachedOriginalValues)
+	{
+		CachedCombatInitialPushForceFactor = CharacterMovement->InitialPushForceFactor;
+		CachedCombatPushForceFactor = CharacterMovement->PushForceFactor;
+		CachedCombatStandingDownwardForceScale = CharacterMovement->StandingDownwardForceScale;
+	}
+	bCombatPhysicsRestoreActive = false;
+	CombatPhysicsRestoreElapsed = 0.0f;
+	const float PushScale = FMath::Clamp(
+		GetSettings().AttackPhysicsPushScaleOnSimulatedBase,
+		0.0f,
+		1.0f);
+	const float StandingLoadScale = FMath::Clamp(
+		GetSettings().AttackStandingDownwardForceScaleOnSimulatedBase,
+		0.0f,
+		1.0f);
+	CharacterMovement->InitialPushForceFactor = CachedCombatInitialPushForceFactor * PushScale;
+	CharacterMovement->PushForceFactor = CachedCombatPushForceFactor * PushScale;
+	CharacterMovement->StandingDownwardForceScale =
+		CachedCombatStandingDownwardForceScale * StandingLoadScale;
+	CombatPhysicsPushScaleRequestId = RequestId;
+}
+
+void URoverLocomotionComponent::RestoreCombatPhysicsPushScale(const int32 RequestId)
+{
+	if (RequestId <= 0 || RequestId != CombatPhysicsPushScaleRequestId)
+	{
+		return;
+	}
+
+	if (CharacterMovement)
+	{
+		const float RestoreDuration = FMath::Max(
+			0.0f,
+			GetSettings().AttackPhysicsRestoreDurationOnSimulatedBase);
+		if (RestoreDuration > UE_KINDA_SMALL_NUMBER)
+		{
+			CombatPhysicsRestoreStartInitialPushForceFactor =
+				CharacterMovement->InitialPushForceFactor;
+			CombatPhysicsRestoreStartPushForceFactor = CharacterMovement->PushForceFactor;
+			CombatPhysicsRestoreStartStandingDownwardForceScale =
+				CharacterMovement->StandingDownwardForceScale;
+			CombatPhysicsRestoreElapsed = 0.0f;
+			bCombatPhysicsRestoreActive = true;
+		}
+		else
+		{
+			CharacterMovement->InitialPushForceFactor = CachedCombatInitialPushForceFactor;
+			CharacterMovement->PushForceFactor = CachedCombatPushForceFactor;
+			CharacterMovement->StandingDownwardForceScale = CachedCombatStandingDownwardForceScale;
+			ClearCombatPhysicsPushRestoreState();
+		}
+	}
+	CombatPhysicsPushScaleRequestId = 0;
+}
+
+void URoverLocomotionComponent::UpdateCombatPhysicsPushRestore(const float DeltaTime)
+{
+	if (!bCombatPhysicsRestoreActive || !CharacterMovement)
+	{
+		return;
+	}
+
+	const float RestoreDuration = FMath::Max(
+		UE_KINDA_SMALL_NUMBER,
+		GetSettings().AttackPhysicsRestoreDurationOnSimulatedBase);
+	CombatPhysicsRestoreElapsed += FMath::Max(0.0f, DeltaTime);
+	const float LinearAlpha = FMath::Clamp(CombatPhysicsRestoreElapsed / RestoreDuration, 0.0f, 1.0f);
+	const float SmoothAlpha = FMath::SmoothStep(0.0f, 1.0f, LinearAlpha);
+	CharacterMovement->InitialPushForceFactor = FMath::Lerp(
+		CombatPhysicsRestoreStartInitialPushForceFactor,
+		CachedCombatInitialPushForceFactor,
+		SmoothAlpha);
+	CharacterMovement->PushForceFactor = FMath::Lerp(
+		CombatPhysicsRestoreStartPushForceFactor,
+		CachedCombatPushForceFactor,
+		SmoothAlpha);
+	CharacterMovement->StandingDownwardForceScale = FMath::Lerp(
+		CombatPhysicsRestoreStartStandingDownwardForceScale,
+		CachedCombatStandingDownwardForceScale,
+		SmoothAlpha);
+	if (LinearAlpha >= 1.0f)
+	{
+		ClearCombatPhysicsPushRestoreState();
+	}
+}
+
+void URoverLocomotionComponent::ClearCombatPhysicsPushRestoreState()
+{
+	bCombatPhysicsRestoreActive = false;
+	CombatPhysicsRestoreElapsed = 0.0f;
+	CombatPhysicsRestoreStartInitialPushForceFactor = 0.0f;
+	CombatPhysicsRestoreStartPushForceFactor = 0.0f;
+	CombatPhysicsRestoreStartStandingDownwardForceScale = 0.0f;
+	CachedCombatInitialPushForceFactor = 0.0f;
+	CachedCombatPushForceFactor = 0.0f;
+	CachedCombatStandingDownwardForceScale = 0.0f;
 }
 
 bool URoverLocomotionComponent::IsCombatAttackAdvanceActive() const
@@ -312,6 +489,11 @@ bool URoverLocomotionComponent::IsCombatAttackAdvanceActive() const
 	return CharacterMovement &&
 		CombatAttackRootMotionSourceId != static_cast<uint16>(ERootMotionSourceID::Invalid) &&
 		CharacterMovement->GetRootMotionSourceByID(CombatAttackRootMotionSourceId).IsValid();
+}
+
+bool URoverLocomotionComponent::HasActiveAnimationRootMotion() const
+{
+	return CharacterMovement && CharacterMovement->HasAnimRootMotion();
 }
 
 bool URoverLocomotionComponent::TryJump()

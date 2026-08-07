@@ -111,7 +111,7 @@ public:
 
 	bool TryBeginCombatMovementRestriction(int32 RequestId);
 	bool TransferCombatMovementRestriction(int32 PreviousRequestId, int32 NewRequestId);
-	void EndCombatMovementRestriction(int32 RequestId);
+	void EndCombatMovementRestriction(int32 RequestId, bool bRestorePhysicsPush = true);
 	bool StartCombatAttackAdvance(int32 RequestId, float Distance, float Duration);
 	void CancelCombatAttackAdvance(int32 RequestId);
 
@@ -120,6 +120,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Rover|State")
 	bool IsCombatAttackAdvanceActive() const;
+
+	UFUNCTION(BlueprintPure, Category = "Rover|State")
+	bool HasActiveAnimationRootMotion() const;
 
 	UFUNCTION(BlueprintPure, Category = "Rover|State")
 	int32 GetGroundTurnRequestId() const { return GroundTurnRequestId; }
@@ -179,6 +182,10 @@ private:
 	float GetMaxSpeedForGait(ERoverGait InGait) const;
 	void CancelGroundTurn();
 	void CancelMoveStop();
+	void ApplyCombatPhysicsPushScale(int32 RequestId);
+	void RestoreCombatPhysicsPushScale(int32 RequestId);
+	void UpdateCombatPhysicsPushRestore(float DeltaTime);
+	void ClearCombatPhysicsPushRestoreState();
 	void SetLocomotionState(ERoverLocomotionState NewState);
 	void SetGait(ERoverGait NewGait);
 
@@ -235,4 +242,13 @@ private:
 	int32 CombatMovementRestrictionRequestId = 0;
 	int32 CombatAttackAdvanceRequestId = 0;
 	uint16 CombatAttackRootMotionSourceId = 0;
+	int32 CombatPhysicsPushScaleRequestId = 0;
+	float CachedCombatInitialPushForceFactor = 0.0f;
+	float CachedCombatPushForceFactor = 0.0f;
+	float CachedCombatStandingDownwardForceScale = 0.0f;
+	float CombatPhysicsRestoreElapsed = 0.0f;
+	float CombatPhysicsRestoreStartInitialPushForceFactor = 0.0f;
+	float CombatPhysicsRestoreStartPushForceFactor = 0.0f;
+	float CombatPhysicsRestoreStartStandingDownwardForceScale = 0.0f;
+	bool bCombatPhysicsRestoreActive = false;
 };
