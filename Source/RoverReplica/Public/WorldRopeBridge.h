@@ -77,8 +77,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
 	float GetEndpointPositionError(int32 AnchorIndex) const;
 
+	// Constraint-local offset: X=vertical, Y=bridge direction, Z=plank width.
+	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
+	FVector GetEndpointConstraintFrameOffset(int32 AnchorIndex) const;
+
 	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
 	float GetMaximumAdjacentPlankDistanceError() const;
+
+	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
+	float GetMaximumPrimaryInternalConstraintFrameSeparation() const;
 
 	UFUNCTION(BlueprintCallable, Category = "Rope Bridge|Debug")
 	bool ApplyImpulseToCenterPlank(const FVector& WorldImpulse);
@@ -151,6 +158,7 @@ private:
 		FVector PreviousVelocity = FVector::ZeroVector;
 		float PeakAirborneDownwardSpeed = 0.0f;
 		float MovementImpulseElapsed = 0.0f;
+		float MovementImpulseSuppressionRemaining = 0.0f;
 		int32 PreviousJumpCount = 0;
 		bool bWasMoving = false;
 		bool bWasFalling = false;
@@ -170,6 +178,9 @@ private:
 		const FWorldRopeBridgeSettings& Settings);
 	FQuat GetNaturalRestRotationForPlank(int32 Index) const;
 	UStaticMeshComponent* FindBridgePlank(UObject* Component) const;
+	bool IsCharacterGroundedOnPlank(
+		const ACharacter* Character,
+		const UStaticMeshComponent* Plank) const;
 	void ApplyCharacterImpulse(
 		UStaticMeshComponent* Plank,
 		const ACharacter* Character,

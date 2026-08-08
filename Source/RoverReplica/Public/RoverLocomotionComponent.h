@@ -62,7 +62,7 @@ public:
 
 	void HandleMovementModeChanged();
 	void HandleGroundJumped();
-	void HandleLanded(float ImpactSpeed);
+	void HandleLanded(float ImpactSpeed, bool bSuppressLandingAnimation = false);
 
 	UFUNCTION(BlueprintPure, Category = "Rover|State")
 	ERoverLocomotionState GetLocomotionState() const { return LocomotionState; }
@@ -81,6 +81,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Rover|State")
 	FVector2D GetMoveInput() const { return MoveInput; }
+
+	UFUNCTION(BlueprintPure, Category = "Rover|State")
+	FVector GetMoveWorldDirection() const { return MoveWorldDirection; }
 
 	UFUNCTION(BlueprintPure, Category = "Rover|State")
 	bool IsSprinting() const { return Gait == ERoverGait::Sprint; }
@@ -110,6 +113,11 @@ public:
 	}
 
 	bool TryBeginCombatMovementRestriction(int32 RequestId);
+	bool TryBeginAirCombatMovementRestriction(
+		int32 RequestId,
+		float HorizontalVelocityScale);
+	bool BeginAirCombatAscent(int32 RequestId, float AscentHeight, float AscentDuration);
+	bool BeginAirCombatDescent(int32 RequestId, float DescentSpeed);
 	bool TransferCombatMovementRestriction(int32 PreviousRequestId, int32 NewRequestId);
 	void EndCombatMovementRestriction(int32 RequestId, bool bRestorePhysicsPush = true);
 	bool StartCombatAttackAdvance(int32 RequestId, float Distance, float Duration);
@@ -131,6 +139,9 @@ public:
 	ERoverGroundTurnType GetGroundTurnType() const { return GroundTurnType; }
 
 	UFUNCTION(BlueprintPure, Category = "Rover|State")
+	ERoverGait GetGroundTurnEntryGait() const { return GroundTurnEntryGait; }
+
+	UFUNCTION(BlueprintPure, Category = "Rover|State")
 	bool IsGroundTurnPending() const { return bGroundTurnPending; }
 
 	UFUNCTION(BlueprintPure, Category = "Rover|State")
@@ -138,6 +149,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Rover|State")
 	bool DoesGroundTurnRight() const { return bGroundTurnRight; }
+
+	UFUNCTION(BlueprintPure, Category = "Rover|State")
+	bool ShouldGroundTurnResumeMovement() const { return bGroundTurnResumeMovement; }
+
+	UFUNCTION(BlueprintPure, Category = "Rover|State")
+	bool IsRunTurnbackResumeWindowOpen() const { return bGroundTurnResumeWindowOpen; }
 
 	UFUNCTION(BlueprintPure, Category = "Rover|State")
 	int32 GetMoveStopRequestId() const { return MoveStopRequestId; }
@@ -158,6 +175,7 @@ public:
 	bool ShouldMoveStopResumeMovement() const { return bMoveStopResumeMovement; }
 
 	void AcknowledgeGroundTurn(int32 RequestId);
+	void AcknowledgeRunTurnbackResumeWindow(int32 RequestId);
 	void CompleteGroundTurn(int32 RequestId);
 	void AcknowledgeMoveStop(int32 RequestId);
 	void CompleteMoveStop(int32 RequestId);
@@ -218,6 +236,7 @@ private:
 	float GroundTurnTargetYaw = 0.0f;
 	float GroundTurnEntrySpeed = 0.0f;
 	float GroundTurnInertiaDistanceApplied = 0.0f;
+	float GroundTurnResumeWindowOpenedAt = 0.0f;
 	float GroundTurnStateElapsed = 0.0f;
 	int32 GroundTurnRequestId = 0;
 	ERoverGait GroundTurnEntryGait = ERoverGait::Idle;
@@ -226,6 +245,7 @@ private:
 	bool bGroundTurnRight = true;
 	bool bGroundTurnArmed = true;
 	bool bGroundTurnResumeMovement = false;
+	bool bGroundTurnResumeWindowOpen = false;
 	bool bGroundTurnControlsOrientation = false;
 	bool bGroundTurnSavedOrientRotationToMovement = true;
 	bool bGroundTurnSavedUseControllerDesiredRotation = false;

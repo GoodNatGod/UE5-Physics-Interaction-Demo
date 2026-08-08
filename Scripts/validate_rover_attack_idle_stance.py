@@ -11,8 +11,8 @@ RIGHT_FOOT_BONE = "Bip001RFoot"
 command_line = unreal.SystemLibrary.get_command_line()
 target_match = re.search(r"(?:^|\s)-RoverAttackIdleTarget=(\d+)(?:\s|$)", command_line)
 TARGET_COMBO_INDEX = int(target_match.group(1)) if target_match else 1
-if TARGET_COMBO_INDEX not in (1, 2, 3):
-    raise RuntimeError(f"Invalid RoverAttackIdleTarget={TARGET_COMBO_INDEX}; expected 1..3")
+if TARGET_COMBO_INDEX not in (1, 2, 3, 4):
+    raise RuntimeError(f"Invalid RoverAttackIdleTarget={TARGET_COMBO_INDEX}; expected 1..4")
 START_TIMEOUT_SECONDS = 30.0
 ATTACK_TIMEOUT_SECONDS = 20.0
 LOCK_OBSERVATION_SECONDS = 1.0
@@ -57,6 +57,15 @@ tick_handle = None
 
 def object_path(value):
     return value.get_path_name() if value else "None"
+
+
+def attack_type_contains(combat, expected_name, previous=False):
+    attack_type = (
+        combat.get_previous_attack_type()
+        if previous
+        else combat.get_current_attack_type()
+    )
+    return expected_name in str(attack_type).upper()
 
 
 def shutdown():
@@ -123,11 +132,31 @@ def begin_validation(world):
         finish(False, "Rover mesh is missing a required foot bone")
         return
 
+    if TARGET_COMBO_INDEX == 4:
+        combat_config = combat.get_editor_property("combat_config")
+        settings = combat_config.get_editor_property("settings")
+        attack_chain = list(settings.get_editor_property("light_attack_chain"))
+        if len(attack_chain) < 4:
+            finish(False, f"combat config has only {len(attack_chain)} attacks")
+            return
+        attack04 = attack_chain[3]
+        blend_out = float(attack04.get_editor_property("montage_blend_out_time"))
+        blend_trigger = float(
+            attack04.get_editor_property("montage_blend_out_trigger_time")
+        )
+        if blend_out < 0.2 or abs(blend_trigger - blend_out) > 0.01:
+            finish(
+                False,
+                f"Attack04 full-body blend-out is invalid: "
+                f"blend={blend_out:.3f}s trigger={blend_trigger:.3f}s",
+            )
+            return
+
     locomotion.set_move_input(
         unreal.Vector2D(0.0, 0.0), unreal.Vector(0.0, 0.0, 0.0)
     )
     combat.set_light_attack_held(False)
-    if not combat.request_light_attack():
+    if not combat.request_attack():
         finish(False, "grounded Attack01 request was rejected")
         return
 
@@ -189,6 +218,9 @@ def validate_attack_end():
     anim_instance = state["anim_instance"]
     if combat.is_attacking():
         state["saw_attacking"] = True
+        if not attack_type_contains(combat, "LIGHT_ATTACK"):
+            finish(False, f"active attack type={combat.get_current_attack_type()}")
+            return
         combo_index = combat.get_current_combo_index()
         if combo_index == TARGET_COMBO_INDEX:
             state["saw_final_attack"] = True
@@ -199,14 +231,49 @@ def validate_attack_end():
                 state["recovery_right_projection"] = recovery_right
                 state["recovery_stance"] = anim_instance.is_using_stand2()
         if (
+            combo_index == 3
+            and combo_index < TARGET_COMBO_INDEX
+            and combo_index not in state["queued_combo_indices"]
+            and not combat.is_combo_window_open()
+            and not combat.is_resonance_window_open()
+            and not combat.is_resonance_trigger_window_open()
+            and any(
+                name in str(combat.get_third_attack_weapon_throw_phase()).upper()
+                for name in ("OUTBOUND", "SPINNING")
+            )
+            and "ACTIVE" in str(combat.get_combat_phase()).upper()
+        ):
+            request_id = combat.get_attack_request_id()
+            if not combat.request_attack():
+                finish(False, "Attack03 rejected the pre-window Attack04 buffer")
+                return
+            if (
+                combat.get_attack_request_id() != request_id
+                or combat.get_current_combo_index() != 3
+                or not combat.is_attack_input_buffered()
+            ):
+                finish(False, "Attack03 pre-window input was not buffered")
+                return
+            state["queued_combo_indices"].add(combo_index)
+            return
+        if (
             combo_index < TARGET_COMBO_INDEX
             and combat.is_combo_window_open()
             and combo_index not in state["queued_combo_indices"]
         ):
-            if not combat.request_light_attack():
+            if not combat.request_attack():
                 finish(False, f"Attack0{combo_index} ComboWindow rejected the next click")
                 return
             state["queued_combo_indices"].add(combo_index)
+        return
+    if not attack_type_contains(combat, "NONE") or not attack_type_contains(
+        combat, "LIGHT_ATTACK", previous=True
+    ):
+        finish(
+            False,
+            f"natural attack end types current={combat.get_current_attack_type()} "
+            f"previous={combat.get_previous_attack_type()}",
+        )
         return
     if not state["saw_attacking"]:
         finish(False, "attack chain never entered the attacking state")

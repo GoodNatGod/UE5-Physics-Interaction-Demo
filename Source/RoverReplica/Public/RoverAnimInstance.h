@@ -20,9 +20,12 @@ public:
 	virtual void NativeInitializeAnimation() override;
 	virtual void NativeUpdateAnimation(float DeltaSeconds) override;
 	void PlayAttackRequestImmediately(int32 RequestId);
+	void TransitionAirAttackToLanding(int32 RequestId);
 	void StopAttackRequest(int32 RequestId, float BlendOutTime);
 	void HandleComboWindowStateBegin();
 	void HandleComboWindowStateEnd();
+	void HandleResonanceWindowStateBegin();
+	void HandleResonanceWindowStateEnd();
 
 	UFUNCTION(BlueprintPure, Category = "Rover|Locomotion")
 	bool IsUsingStand2() const { return bUseStand2; }
@@ -50,6 +53,9 @@ public:
 
 	UFUNCTION()
 	void AnimNotify_RoverAttackStarted();
+
+	UFUNCTION()
+	void AnimNotify_RoverAirAttackApex();
 
 	UFUNCTION()
 	void AnimNotify_RoverAttackActiveBegin();
@@ -166,6 +172,12 @@ public:
 	bool bRunTurnbackRequested = false;
 
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Rover|Locomotion")
+	bool bRunTurnbackShouldExit = true;
+
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Rover|Locomotion")
+	float RunTurnbackNormalizedTime = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Rover|Locomotion")
 	bool bGroundTurnRight = true;
 
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Rover|Locomotion")
@@ -196,10 +208,19 @@ public:
 	ERoverCombatPhase CombatPhase = ERoverCombatPhase::None;
 
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Rover|Combat")
+	ERoverAttackType AttackType = ERoverAttackType::None;
+
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Rover|Combat")
 	ERoverHitReactionType HitReactionType = ERoverHitReactionType::None;
 
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Rover|Combat")
 	bool bIsAttacking = false;
+
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Rover|Combat")
+	bool bIsHeavyAttack = false;
+
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Rover|Combat")
+	bool bIsResonance = false;
 
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Rover|Combat")
 	bool bIsInHitReaction = false;
@@ -235,6 +256,8 @@ private:
 	int32 ObservedHitReactionRequestId = 0;
 	float MoveStopRemainingTime = 0.0f;
 	float MoveStopElapsedTime = 0.0f;
+	float RunTurnbackRemainingTime = 0.0f;
+	float RunTurnbackElapsedTime = 0.0f;
 	ERoverGait PreviousGait = ERoverGait::Idle;
 	bool bPreviousSecondJumpUsed = false;
 	bool bWasIdleVariationEligible = false;

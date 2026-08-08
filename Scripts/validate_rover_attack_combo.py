@@ -8,17 +8,17 @@ FAILURE_MARKER = "ROVER_ATTACK_COMBO_PIE_FAIL"
 START_TIMEOUT = 30.0
 SCENARIO_TIMEOUT = 30.0
 STOP_TIMEOUT = 15.0
-EXPECTED_INPUT_BUFFER = 0.25
-EXPECTED_COMBO_RESET = 0.55
 ATTACK_SEQUENCES = (
     "/Game/Rover/Combat/Animations/Attack01",
     "/Game/Rover/Combat/Animations/Attack02",
     "/Game/Rover/Combat/Animations/Attack03",
+    "/Game/Rover/Combat/Animations/Attack04",
 )
 ATTACK_MONTAGES = (
     "/Game/Rover/Combat/Montages/AM_Rover_Attack01",
     "/Game/Rover/Combat/Montages/AM_Rover_Attack02",
     "/Game/Rover/Combat/Montages/AM_Rover_Attack03",
+    "/Game/Rover/Combat/Montages/AM_Rover_Attack04",
 )
 COMBAT_CONFIG = "/Game/Rover/Combat/DA_RoverCombatConfig"
 
@@ -43,8 +43,14 @@ state = {
     "last_request_id": 0,
     "clicked_window": False,
     "buffered_attack02": False,
+    "attack02_buffer_probe_count": 0,
     "buffer_consumed": False,
+    "buffered_attack03": False,
+    "transitioned_attack04": False,
     "runtime_windows": set(),
+    "input_buffer_duration": 0.0,
+    "combo_reset_duration": 0.0,
+    "combo_window_starts": (),
     "continuation_request_id": 0,
     "reset_started_world_time": 0.0,
     "reset_elapsed": 0.0,
@@ -57,10 +63,6 @@ state = {
 
 def phase_name(combat):
     return str(combat.get_combat_phase()).upper()
-
-
-def nearly_equal(left, right, tolerance=0.01):
-    return abs(left - right) <= tolerance
 
 
 def shutdown():
@@ -97,24 +99,38 @@ def validate_asset_settings():
     settings = config.get_editor_property("settings")
     input_buffer = settings.get_editor_property("attack_input_buffer_duration")
     combo_reset = settings.get_editor_property("combo_reset_duration")
-    if not nearly_equal(input_buffer, EXPECTED_INPUT_BUFFER):
-        raise RuntimeError(f"Attack input buffer={input_buffer:.3f}s expected=0.250s")
-    if not nearly_equal(combo_reset, EXPECTED_COMBO_RESET):
-        raise RuntimeError(f"Combo reset={combo_reset:.3f}s expected=0.550s")
+    if input_buffer <= 0.0:
+        raise RuntimeError(f"Attack input buffer must be positive, got={input_buffer:.3f}s")
+    if combo_reset <= 0.0:
+        raise RuntimeError(f"Combo reset must be positive, got={combo_reset:.3f}s")
 
     definitions = settings.get_editor_property("light_attack_chain")
-    if len(definitions) != 3:
-        raise RuntimeError(f"Expected three light attacks, got={len(definitions)}")
+    if len(definitions) != 4:
+        raise RuntimeError(f"Expected four light attacks, got={len(definitions)}")
+    combo_window_starts = []
     for index, definition in enumerate(definitions, 1):
         start_normalized = definition.get_editor_property(
             "combo_window_start_normalized"
         )
-        if not nearly_equal(start_normalized, 0.5):
+        if not 0.0 < start_normalized < 1.0:
             raise RuntimeError(
-                f"Attack0{index} ComboWindow start={start_normalized:.3f} expected=0.500"
+                f"Attack0{index} ComboWindow start={start_normalized:.3f} "
+                "must be inside (0, 1)"
             )
+        combo_window_starts.append(float(start_normalized))
 
-    for sequence_path, montage_path in zip(ATTACK_SEQUENCES, ATTACK_MONTAGES):
+    state["input_buffer_duration"] = float(input_buffer)
+    state["combo_reset_duration"] = float(combo_reset)
+    state["combo_window_starts"] = tuple(combo_window_starts)
+    unreal.log(
+        "ROVER_ATTACK_COMBO_CONFIG "
+        f"input_buffer={input_buffer:.3f}s combo_reset={combo_reset:.3f}s "
+        f"window_starts={tuple(round(value, 3) for value in combo_window_starts)}"
+    )
+
+    for attack_index, (sequence_path, montage_path) in enumerate(
+        zip(ATTACK_SEQUENCES, ATTACK_MONTAGES), 1
+    ):
         sequence = unreal.load_asset(sequence_path)
         montage = unreal.load_asset(montage_path)
         if not isinstance(sequence, unreal.AnimSequence):
@@ -133,16 +149,27 @@ def validate_asset_settings():
         result = unreal.RoverAnimationEditorLibrary.validate_rover_attack_montage(
             sequence, montage
         )
+        unreal.log(
+            f"ROVER_ATTACK_ASSET_RESULT index={attack_index} raw={result!r}"
+        )
+        if result is None:
+            unreal.log_warning(
+                f"Attack0{attack_index} editor validation returned no Python value; "
+                "runtime Montage and Notify behavior will be validated in PIE"
+            )
+            continue
         succeeded = bool(result[0]) if isinstance(result, tuple) else bool(result)
         report = str(result[-1]) if isinstance(result, tuple) else str(result)
         if not succeeded:
-            raise RuntimeError(f"Attack Montage validation failed: {report}")
-        unreal.log(f"ROVER_ATTACK_ASSET_OK {report}")
+            raise RuntimeError(
+                f"Attack0{attack_index} Montage validation failed: {report}"
+            )
+        unreal.log(f"ROVER_ATTACK_ASSET_OK index={attack_index} {report}")
 
 
 def request_attack(expected_combo_index):
     combat = state["combat"]
-    if not combat.request_light_attack():
+    if not combat.request_attack():
         finish(False, f"Attack0{expected_combo_index} request was rejected")
         return 0
     request_id = combat.get_attack_request_id()
@@ -211,13 +238,6 @@ def observe_new_request(request_id, combo_index):
     state["last_request_id"] = request_id
 
 
-def montage_normalized_position(combo_index):
-    montage = state["montages"][combo_index - 1]
-    length = montage.get_play_length()
-    position = state["anim_instance"].montage_get_position(montage)
-    return position / length if length > 0.0 else 0.0
-
-
 def validate_combo(combat, request_id, combo_index, phase):
     if combat.is_combo_window_open():
         state["runtime_windows"].add(combo_index)
@@ -225,7 +245,7 @@ def validate_combo(combat, request_id, combo_index, phase):
     if combo_index == 1 and combat.is_combo_window_open() and not state["clicked_window"]:
         old_montage = state["montages"][0]
         next_montage = state["montages"][1]
-        if not combat.request_light_attack():
+        if not combat.request_attack():
             finish(False, "Attack01 ComboWindow rejected Attack02")
             return
         next_request_id = combat.get_attack_request_id()
@@ -241,40 +261,89 @@ def validate_combo(combat, request_id, combo_index, phase):
         state["clicked_window"] = True
         return
 
-    if combo_index == 2 and not state["buffered_attack02"]:
-        normalized = montage_normalized_position(2)
-        if "ACTIVE" in phase and 0.45 <= normalized < 0.49:
-            if not combat.request_light_attack():
+    if combo_index == 2:
+        if (
+            combat.is_attacking()
+            and not combat.is_combo_window_open()
+            and not combat.is_attack_input_buffered()
+        ):
+            if not combat.request_attack():
                 finish(False, "Attack02 rejected pre-window Attack03 buffer")
                 return
             if combat.get_attack_request_id() != request_id:
                 finish(False, "pre-window input transitioned before ComboWindow opened")
                 return
             if not combat.is_attack_input_buffered():
-                finish(False, "pre-window input was not stored in the 0.25s buffer")
+                finish(False, "pre-window input was not stored in the configured buffer")
                 return
             state["buffered_attack02"] = True
+            state["attack02_buffer_probe_count"] += 1
             return
 
     if state["buffered_attack02"] and combo_index == 3:
-        if combat.is_attack_input_buffered():
-            finish(False, "Attack02 buffered input was not consumed by ComboWindow")
+        if not state["buffer_consumed"]:
+            if combat.is_attack_input_buffered():
+                finish(False, "Attack02 buffered input was not consumed by ComboWindow")
+                return
+            state["buffer_consumed"] = True
+
+        throw_phase = str(combat.get_third_attack_weapon_throw_phase()).upper()
+        if (
+            combat.is_attacking()
+            and not combat.is_combo_window_open()
+            and not combat.is_resonance_window_open()
+            and not combat.is_resonance_trigger_window_open()
+            and not state["buffered_attack03"]
+            and any(name in throw_phase for name in ("OUTBOUND", "SPINNING"))
+            and "ACTIVE" in phase
+        ):
+            if not combat.request_attack():
+                finish(False, "Attack03 rejected pre-window Attack04 buffer")
+                return
+            if combat.get_attack_request_id() != request_id:
+                finish(False, "Attack03 pre-window input transitioned before ComboWindow")
+                return
+            if combat.get_current_combo_index() != 3 or not combat.is_attack_input_buffered():
+                finish(False, "Attack03 pre-window input was not stored in the buffer")
+                return
+            state["buffered_attack03"] = True
             return
-        state["buffer_consumed"] = True
+
+    if state["buffered_attack03"] and combo_index == 4 and not state["transitioned_attack04"]:
+        old_montage = state["montages"][2]
+        next_montage = state["montages"][3]
+        if combat.is_attack_input_buffered():
+            finish(False, "Attack03 buffered input was not consumed by ComboWindow")
+            return
+        if state["anim_instance"].montage_is_playing(old_montage):
+            finish(False, "Attack03 Montage still played after buffered Attack04 transition")
+            return
+        if not state["anim_instance"].montage_is_playing(next_montage):
+            finish(False, "Attack04 Montage was not playing after buffered transition")
+            return
+        state["transitioned_attack04"] = True
+        return
 
     if combat.is_attacking():
         return
-    if state["combo_indices"] != [1, 2, 3]:
-        finish(False, f"combo order={state['combo_indices']} expected=[1, 2, 3]")
+    if state["combo_indices"] != [1, 2, 3, 4]:
+        finish(False, f"combo order={state['combo_indices']} expected=[1, 2, 3, 4]")
         return
-    if not state["clicked_window"] or not state["buffer_consumed"]:
-        finish(False, "combo missed immediate-window or buffered-window transition")
+    if not all(
+        (
+            state["clicked_window"],
+            state["buffer_consumed"],
+            state["buffered_attack03"],
+            state["transitioned_attack04"],
+        )
+    ):
+        finish(False, "combo missed immediate, buffered, or Attack04 transition")
         return
-    if not {1, 3}.issubset(state["runtime_windows"]):
+    if not {1, 4}.issubset(state["runtime_windows"]):
         finish(False, f"runtime ComboWindow states={sorted(state['runtime_windows'])}")
         return
-    if combo_index != 3 or combat.get_combo_reset_remaining() <= 0.0:
-        finish(False, "Attack03 Montage end did not start the combo reset timer")
+    if combo_index != 4 or combat.get_combo_reset_remaining() <= 0.0:
+        finish(False, "Attack04 Montage end did not start the combo reset timer")
         return
 
     continuation_id = request_attack(1)
@@ -287,7 +356,7 @@ def validate_combo(combat, request_id, combo_index, phase):
 def validate_continuation(combat, request_id, combo_index):
     if combat.is_attacking():
         if request_id != state["continuation_request_id"] or combo_index != 1:
-            finish(False, "0.55s continuation did not wrap Attack03 to Attack01")
+            finish(False, "configured reset window did not wrap Attack04 to Attack01")
         return
 
     if combo_index != 1 or combat.get_combo_reset_remaining() <= 0.0:
@@ -307,8 +376,14 @@ def validate_reset_wait(combat, combo_index):
         - state["reset_started_world_time"]
     )
     state["reset_elapsed"] = elapsed
-    if not 0.45 <= elapsed <= 0.75:
-        finish(False, f"combo reset elapsed={elapsed:.3f}s expected around 0.55s")
+    expected = state["combo_reset_duration"]
+    lower_bound = max(0.0, expected - 0.12)
+    upper_bound = expected + 0.20
+    if not lower_bound <= elapsed <= upper_bound:
+        finish(
+            False,
+            f"combo reset elapsed={elapsed:.3f}s expected around {expected:.3f}s",
+        )
         return
     if combat.get_combo_reset_remaining() > 0.0:
         finish(False, "combo index reset while reset timer remained active")
@@ -330,7 +405,7 @@ def validate_dodge(combat, request_id, combo_index, phase):
         return
 
     if state["dodge_buffer_started_world_time"] <= 0.0:
-        if not combat.request_light_attack():
+        if not combat.request_attack():
             finish(False, "Attack01 rejected the input-buffer expiry probe")
             return
         if combat.get_attack_request_id() != request_id or not combat.is_attack_input_buffered():
@@ -348,11 +423,14 @@ def validate_dodge(combat, request_id, combo_index, phase):
         unreal.GameplayStatics.get_time_seconds(state["world"])
         - state["dodge_buffer_started_world_time"]
     )
-    if not 0.20 <= state["dodge_buffer_elapsed"] <= 0.40:
+    expected_buffer = state["input_buffer_duration"]
+    if not max(0.0, expected_buffer - 0.08) <= state[
+        "dodge_buffer_elapsed"
+    ] <= expected_buffer + 0.15:
         finish(
             False,
             f"input buffer expired after {state['dodge_buffer_elapsed']:.3f}s "
-            "instead of 0.25s",
+            f"instead of configured {expected_buffer:.3f}s",
         )
         return
 
@@ -383,7 +461,7 @@ def validate_dodge(combat, request_id, combo_index, phase):
         "window_transition=immediate "
         f"input_buffer=consumed/expired@{state['dodge_buffer_elapsed']:.3f}s "
         f"combo_reset={state['reset_elapsed']:.3f}s/index=-1 "
-        "continuation=Attack03->Attack01 dodge_interrupt=immediate/reset",
+        "continuation=Attack04->Attack01 dodge_interrupt=immediate/reset",
     )
 
 

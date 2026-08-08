@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$EngineRoot,
-    [ValidateRange(1, 3)][int]$TargetAttack = 1,
+    [string]$EngineRoot = "D:\unreal\UE_5.8",
+    [ValidateRange(1, 4)][int]$TargetAttack = 1,
     [ValidateRange(30, 600)][int]$TimeoutSeconds = 120
 )
 

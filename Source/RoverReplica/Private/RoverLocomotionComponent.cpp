@@ -252,6 +252,68 @@ bool URoverLocomotionComponent::TryBeginCombatMovementRestriction(const int32 Re
 	return true;
 }
 
+bool URoverLocomotionComponent::TryBeginAirCombatMovementRestriction(
+	const int32 RequestId,
+	const float HorizontalVelocityScale)
+{
+	if (RequestId <= 0 || !CharacterOwner || !CharacterMovement ||
+		!CharacterMovement->IsFalling() || InputLockRemaining > 0.0f ||
+		CombatMovementRestrictionRequestId != 0)
+	{
+		return false;
+	}
+
+	CancelGroundTurn();
+	CancelMoveStop();
+	CombatMovementRestrictionRequestId = RequestId;
+	const float RetainedHorizontalScale = FMath::Clamp(HorizontalVelocityScale, 0.0f, 1.0f);
+	CharacterMovement->Velocity.X *= RetainedHorizontalScale;
+	CharacterMovement->Velocity.Y *= RetainedHorizontalScale;
+	return true;
+}
+
+bool URoverLocomotionComponent::BeginAirCombatAscent(
+	const int32 RequestId,
+	const float AscentHeight,
+	const float AscentDuration)
+{
+	if (RequestId <= 0 || RequestId != CombatMovementRestrictionRequestId ||
+		!CharacterMovement || !CharacterMovement->IsFalling())
+	{
+		return false;
+	}
+
+	const float Duration = FMath::Max(AscentDuration, UE_SMALL_NUMBER);
+	const float Height = FMath::Max(0.0f, AscentHeight);
+	if (Height <= UE_SMALL_NUMBER)
+	{
+		CharacterMovement->Velocity.Z = 0.0f;
+		return true;
+	}
+
+	// Solve s = v0*t + 0.5*g*t^2 so the configured displacement is reached
+	// when the animation's apex notify fires.
+	const float GravityZ = CharacterMovement->GetGravityZ();
+	CharacterMovement->Velocity.Z = FMath::Max(
+		0.0f,
+		(Height - 0.5f * GravityZ * Duration * Duration) / Duration);
+	return true;
+}
+
+bool URoverLocomotionComponent::BeginAirCombatDescent(
+	const int32 RequestId,
+	const float DescentSpeed)
+{
+	if (RequestId <= 0 || RequestId != CombatMovementRestrictionRequestId ||
+		!CharacterMovement || !CharacterMovement->IsFalling())
+	{
+		return false;
+	}
+
+	CharacterMovement->Velocity.Z = -FMath::Max(0.0f, DescentSpeed);
+	return true;
+}
+
 bool URoverLocomotionComponent::TransferCombatMovementRestriction(
 	const int32 PreviousRequestId,
 	const int32 NewRequestId)
@@ -300,7 +362,7 @@ bool URoverLocomotionComponent::StartCombatAttackAdvance(
 		? CombatAttackAdvanceRequestId
 		: CombatPhysicsPushScaleRequestId;
 	CancelCombatAttackAdvance(PreviousAttackMovementRequestId);
-	float ResolvedDistance = FMath::Max(0.0f, Distance);
+	float ResolvedDistance = Distance;
 	// The animated start notify can arrive after a one-frame movement-base transition.
 	// Preserve the classification captured when this attack request was accepted.
 	const bool bIsOnSimulatedBase =
@@ -318,7 +380,7 @@ bool URoverLocomotionComponent::StartCombatAttackAdvance(
 	{
 		return true;
 	}
-	if (ResolvedDistance <= UE_KINDA_SMALL_NUMBER)
+	if (FMath::Abs(ResolvedDistance) <= UE_KINDA_SMALL_NUMBER)
 	{
 		return true;
 	}
@@ -583,7 +645,9 @@ void URoverLocomotionComponent::HandleMovementModeChanged()
 	UpdateLocomotionState();
 }
 
-void URoverLocomotionComponent::HandleLanded(const float ImpactSpeed)
+void URoverLocomotionComponent::HandleLanded(
+	const float ImpactSpeed,
+	const bool bSuppressLandingAnimation)
 {
 	if (!CharacterMovement)
 	{
@@ -596,6 +660,13 @@ void URoverLocomotionComponent::HandleLanded(const float ImpactSpeed)
 	bSecondJumpUsed = false;
 	InputLockRemaining = 0.0f;
 	LandingStateRemaining = 0.0f;
+	if (bSuppressLandingAnimation)
+	{
+		LandingType = ERoverLandingType::None;
+		OnLanded.Broadcast(LandingType, ResolvedImpactSpeed);
+		UpdateLocomotionState();
+		return;
+	}
 
 	if (bCrouchHeld || ResolvedImpactSpeed > Settings.HeavyLandingMaxSpeed)
 	{
@@ -731,16 +802,16 @@ void URoverLocomotionComponent::UpdateActiveRunTurnback()
 	ActorRotation.Yaw = GroundTurnTargetYaw;
 	CharacterOwner->SetActorRotation(ActorRotation);
 
-	// Player input remains locked to the turnback state, so drive its two motion
-	// phases here: a short collision-aware slide, then rapid acceleration in the
-	// new direction. This keeps the animation and capsule from pausing between
-	// the turn and resumed sprint movement.
+	// Player input remains locked to the turnback state. Keep the old-direction
+	// slide separate from recovery so the animation controls when new-direction
+	// movement is allowed to begin.
 	CharacterMovement->Velocity.X = 0.0f;
 	CharacterMovement->Velocity.Y = 0.0f;
 	const FRoverMovementSettings& Settings = GetSettings();
 	const float InertiaDistance = FMath::Max(0.0f, Settings.RunTurnbackInertiaDistance);
 	const float InertiaDuration = FMath::Max(0.05f, Settings.RunTurnbackInertiaDuration);
-	if (!bGroundTurnInertiaBlocked && InertiaDistance > UE_KINDA_SMALL_NUMBER &&
+	if (!bGroundTurnResumeWindowOpen && !bGroundTurnInertiaBlocked &&
+		InertiaDistance > UE_KINDA_SMALL_NUMBER &&
 		!GroundTurnInertiaDirection.IsNearlyZero())
 	{
 		const float InertiaAlpha = FMath::Clamp(GroundTurnStateElapsed / InertiaDuration, 0.0f, 1.0f);
@@ -770,11 +841,13 @@ void URoverLocomotionComponent::UpdateActiveRunTurnback()
 		}
 	}
 
-	if (GroundTurnStateElapsed >= InertiaDuration &&
+	if (bGroundTurnResumeWindowOpen &&
 		bGroundTurnResumeMovement &&
 		!GroundTurnDesiredDirection.IsNearlyZero())
 	{
-		const float RecoveryElapsed = GroundTurnStateElapsed - InertiaDuration;
+		const float RecoveryElapsed = FMath::Max(
+			0.0f,
+			GroundTurnStateElapsed - GroundTurnResumeWindowOpenedAt);
 		const float MaxRecoverySpeed = GetMaxSpeedForGait(GroundTurnEntryGait);
 		const float RecoverySpeed = FMath::Min(
 			MaxRecoverySpeed,
@@ -1002,6 +1075,8 @@ void URoverLocomotionComponent::AcknowledgeGroundTurn(const int32 RequestId)
 			GroundTurnInertiaDirection = CharacterOwner->GetActorForwardVector().GetSafeNormal2D();
 		}
 		GroundTurnInertiaDistanceApplied = 0.0f;
+		GroundTurnResumeWindowOpenedAt = 0.0f;
+		bGroundTurnResumeWindowOpen = false;
 		bGroundTurnInertiaBlocked = false;
 		bGroundTurnSavedOrientRotationToMovement = CharacterMovement->bOrientRotationToMovement;
 		bGroundTurnSavedUseControllerDesiredRotation = CharacterMovement->bUseControllerDesiredRotation;
@@ -1017,6 +1092,19 @@ void URoverLocomotionComponent::AcknowledgeGroundTurn(const int32 RequestId)
 		ActorRotation.Yaw = GroundTurnTargetYaw;
 		CharacterOwner->SetActorRotation(ActorRotation);
 	}
+}
+
+void URoverLocomotionComponent::AcknowledgeRunTurnbackResumeWindow(const int32 RequestId)
+{
+	if (!bGroundTurnActive || RequestId != GroundTurnRequestId ||
+		GroundTurnType != ERoverGroundTurnType::RunTurnback ||
+		!bGroundTurnResumeMovement || bGroundTurnResumeWindowOpen)
+	{
+		return;
+	}
+
+	bGroundTurnResumeWindowOpen = true;
+	GroundTurnResumeWindowOpenedAt = GroundTurnStateElapsed;
 }
 
 void URoverLocomotionComponent::CompleteGroundTurn(const int32 RequestId)
@@ -1053,8 +1141,11 @@ void URoverLocomotionComponent::CompleteGroundTurn(const int32 RequestId)
 			const float CurrentResumeSpeed = FMath::Max(
 				0.0f,
 				FVector::DotProduct(CharacterMovement->Velocity, MoveWorldDirection));
+			const float MinimumResumeSpeed = FMath::Min(
+				FMath::Max(0.0f, Settings.RunTurnbackRecoveryInitialSpeed),
+				MaxResumeSpeed);
 			const float ResumedSpeed = FMath::Clamp(
-				FMath::Max(CurrentResumeSpeed, FMath::Min(GroundTurnEntrySpeed, MaxResumeSpeed)),
+				FMath::Max(CurrentResumeSpeed, MinimumResumeSpeed),
 				0.0f,
 				MaxResumeSpeed);
 			const FVector ResumedVelocity = MoveWorldDirection * ResumedSpeed;
@@ -1160,9 +1251,11 @@ void URoverLocomotionComponent::CancelGroundTurn()
 	GroundTurnTargetYaw = 0.0f;
 	GroundTurnEntrySpeed = 0.0f;
 	GroundTurnInertiaDistanceApplied = 0.0f;
+	GroundTurnResumeWindowOpenedAt = 0.0f;
 	GroundTurnStateElapsed = 0.0f;
 	GroundTurnEntryGait = ERoverGait::Idle;
 	bGroundTurnResumeMovement = false;
+	bGroundTurnResumeWindowOpen = false;
 	bGroundTurnInertiaBlocked = false;
 }
 

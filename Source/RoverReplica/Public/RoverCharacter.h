@@ -77,21 +77,36 @@ public:
 	float GetCombatWeaponWorldLength() const;
 
 	bool TryBeginCombatMovementRestriction(int32 RequestId);
+	bool TryBeginAirCombatMovementRestriction(
+		int32 RequestId,
+		float HorizontalVelocityScale);
+	bool BeginAirCombatAscent(int32 RequestId, float AscentHeight, float AscentDuration);
+	bool BeginAirCombatDescent(int32 RequestId, float DescentSpeed);
 	bool TransferCombatMovementRestriction(int32 PreviousRequestId, int32 NewRequestId);
 	void EndCombatMovementRestriction(int32 RequestId, bool bRestorePhysicsPush = true);
+	FVector GetCombatDirectionIntent() const;
+	bool FaceCombatDirection(const FVector& WorldDirection);
 	bool StartCombatAttackAdvance(int32 RequestId, float Distance, float Duration);
 	void CancelCombatAttackAdvance(int32 RequestId);
 	void PlayCombatAttackImmediately(int32 RequestId);
+	void TransitionAirAttackToLanding(int32 RequestId);
 	void StopCombatAttack(int32 RequestId, float BlendOutTime);
 	void SetCombatWeaponHand(ERoverWeaponHand WeaponHand);
+	bool GetCombatWeaponAttachmentWorldTransform(ERoverWeaponHand WeaponHand, FTransform& OutTransform) const;
+	bool DetachCombatWeaponForThrow();
+	bool SetCombatWeaponWorldTransform(const FTransform& WorldTransform);
+	void RestoreCombatWeaponAttachment(ERoverWeaponHand WeaponHand);
 	void SetCombatWeaponVisible(bool bVisible);
 	bool GetWeaponTraceLocations(FVector& OutBase, FVector& OutTip) const;
 
 	void HandleAttackStartedNotify(int32 RequestId);
+	void HandleAirAttackApexNotify(int32 RequestId);
 	void HandleAttackActiveBeginNotify(int32 RequestId);
 	void HandleAttackActiveEndNotify(int32 RequestId);
 	void HandleComboWindowBeginNotify(int32 RequestId);
 	void HandleComboWindowEndNotify(int32 RequestId);
+	void HandleResonanceWindowBeginNotify(int32 RequestId);
+	void HandleResonanceWindowEndNotify(int32 RequestId);
 	void HandleAttackRecoveryBeginNotify(int32 RequestId);
 	void HandleAttackFinishedNotify(int32 RequestId);
 	void HandleAttackMontageEnded(int32 RequestId, bool bInterrupted);

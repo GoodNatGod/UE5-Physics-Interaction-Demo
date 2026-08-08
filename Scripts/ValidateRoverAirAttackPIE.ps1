@@ -12,20 +12,20 @@ $projectFiles = @(Get-ChildItem -LiteralPath $projectRoot -File -Filter "*.uproj
 if ($projectFiles.Count -ne 1) {
     throw "Expected exactly one .uproject in '$projectRoot'; found $($projectFiles.Count)."
 }
-$scriptPath = Join-Path $PSScriptRoot "validate_rover_attack_combo.py"
+$scriptPath = Join-Path $PSScriptRoot "validate_rover_air_attack.py"
 $editorCommand = Join-Path $EngineRoot "Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
 if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
-    throw "Attack combo PIE validation script was not found: '$scriptPath'."
+    throw "Air attack PIE validation script was not found: '$scriptPath'."
 }
 if (-not (Test-Path -LiteralPath $editorCommand -PathType Leaf)) {
     throw "Unreal Editor command was not found: '$editorCommand'."
 }
 if (Get-Process -Name "UnrealEditor" -ErrorAction SilentlyContinue) {
-    throw "Close Unreal Editor before running the attack combo PIE validation."
+    throw "Close Unreal Editor before running the air attack PIE validation."
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$validationLog = Join-Path ([IO.Path]::GetTempPath()) "RoverReplica-AttackCombo-PIE-$timestamp-$PID.log"
+$validationLog = Join-Path ([IO.Path]::GetTempPath()) "RoverReplica-AirAttack-PIE-$timestamp-$PID.log"
 $localDataCache = Join-Path $projectRoot "DerivedDataCache\Validation"
 New-Item -ItemType Directory -Force -Path $localDataCache | Out-Null
 $arguments = @(
@@ -45,23 +45,23 @@ $arguments = @(
 $process = Start-Process -FilePath $editorCommand -ArgumentList $arguments -PassThru -WindowStyle Hidden
 if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-    throw "Attack combo PIE validation timed out; see '$validationLog'."
+    throw "Air attack PIE validation timed out; see '$validationLog'."
 }
 $process.WaitForExit()
 
 if (-not (Test-Path -LiteralPath $validationLog -PathType Leaf)) {
-    throw "Attack combo PIE validation produced no log."
+    throw "Air attack PIE validation produced no log."
 }
-$failure = Select-String -LiteralPath $validationLog -SimpleMatch "ROVER_ATTACK_COMBO_PIE_FAIL" | Select-Object -Last 1
+$failure = Select-String -LiteralPath $validationLog -SimpleMatch "ROVER_AIR_ATTACK_PIE_FAIL" | Select-Object -Last 1
 if ($failure) {
-    throw "Attack combo PIE validation failed: $($failure.Line.Trim()); see '$validationLog'."
+    throw "Air attack PIE validation failed: $($failure.Line.Trim()); see '$validationLog'."
 }
 if ($process.ExitCode -ne 0) {
     throw "Unreal Editor exited with code $($process.ExitCode); see '$validationLog'."
 }
-$success = Select-String -LiteralPath $validationLog -SimpleMatch "ROVER_ATTACK_COMBO_PIE_OK" | Select-Object -Last 1
+$success = Select-String -LiteralPath $validationLog -SimpleMatch "ROVER_AIR_ATTACK_PIE_OK" | Select-Object -Last 1
 if (-not $success) {
-    throw "Attack combo PIE validation produced no success marker; see '$validationLog'."
+    throw "Air attack PIE validation produced no success marker; see '$validationLog'."
 }
 Write-Host $success.Line.Trim()
-Write-Host "Attack combo PIE validation log: $validationLog"
+Write-Host "Air attack PIE validation log: $validationLog"

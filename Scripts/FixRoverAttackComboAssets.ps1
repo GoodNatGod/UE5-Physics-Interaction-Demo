@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$EngineRoot
+    [string]$EngineRoot = "D:\unreal\UE_5.8"
 )
 
 Set-StrictMode -Version Latest

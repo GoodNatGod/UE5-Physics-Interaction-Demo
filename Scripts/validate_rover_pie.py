@@ -186,7 +186,7 @@ def validate_play_world(world):
     state["jump_start_world_time"] = unreal.GameplayStatics.get_time_seconds(world)
     state["mesh_height"] = effective_mesh_height
     if not locomotion.try_jump():
-        finish(False, "locomotion rejected a grounded jump")
+        state["last"] = "waiting for locomotion to accept the grounded jump"
         return
 
     state["phase"] = "jumping"

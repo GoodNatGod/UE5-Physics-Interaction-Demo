@@ -336,9 +336,10 @@ void ARoverCharacter::Landed(const FHitResult& Hit)
 {
 	const float ImpactSpeed = FMath::Max(0.0f, -GetVelocity().Z);
 	Super::Landed(Hit);
+	const bool bAirAttackLanded = CombatComponent && CombatComponent->HandleLanded(ImpactSpeed);
 	if (LocomotionComponent)
 	{
-		LocomotionComponent->HandleLanded(ImpactSpeed);
+		LocomotionComponent->HandleLanded(ImpactSpeed, bAirAttackLanded);
 	}
 }
 
@@ -585,8 +586,7 @@ void ARoverCharacter::HandleAttackStarted()
 {
 	if (CombatComponent)
 	{
-		CombatComponent->SetLightAttackHeld(true);
-		CombatComponent->RequestLightAttack();
+		CombatComponent->BeginAttackInput();
 	}
 }
 
@@ -594,7 +594,7 @@ void ARoverCharacter::HandleAttackCompleted()
 {
 	if (CombatComponent)
 	{
-		CombatComponent->SetLightAttackHeld(false);
+		CombatComponent->EndAttackInput();
 	}
 }
 
@@ -673,9 +673,101 @@ void ARoverCharacter::SetCombatWeaponHand(const ERoverWeaponHand WeaponHand)
 		RelativeScale));
 }
 
+bool ARoverCharacter::GetCombatWeaponAttachmentWorldTransform(
+	const ERoverWeaponHand WeaponHand,
+	FTransform& OutTransform) const
+{
+	if (!CombatComponent || !GetMesh())
+	{
+		return false;
+	}
+
+	const FRoverCombatSettings& Settings = CombatComponent->GetSettings();
+	const bool bUseLeftHand = WeaponHand == ERoverWeaponHand::Left;
+	const FName AttachmentSocket = bUseLeftHand
+		? Settings.LeftHandWeaponSocket
+		: Settings.CharacterWeaponSocket;
+	if (AttachmentSocket.IsNone() || !GetMesh()->DoesSocketExist(AttachmentSocket))
+	{
+		return false;
+	}
+
+	const FTransform RelativeTransform(
+		bUseLeftHand ? Settings.LeftHandWeaponRelativeRotation : Settings.WeaponRelativeRotation,
+		bUseLeftHand ? Settings.LeftHandWeaponRelativeLocation : Settings.WeaponRelativeLocation,
+		bUseLeftHand ? Settings.LeftHandWeaponRelativeScale : Settings.WeaponRelativeScale);
+	OutTransform = RelativeTransform * GetMesh()->GetSocketTransform(AttachmentSocket, RTS_World);
+	return !OutTransform.ContainsNaN();
+}
+
+bool ARoverCharacter::DetachCombatWeaponForThrow()
+{
+	if (!CombatWeapon || !CombatWeapon->GetSkeletalMeshAsset())
+	{
+		return false;
+	}
+
+	CombatWeapon->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+	CombatWeapon->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	CombatWeapon->SetSimulatePhysics(false);
+	return CombatWeapon->GetAttachParent() == nullptr;
+}
+
+bool ARoverCharacter::SetCombatWeaponWorldTransform(const FTransform& WorldTransform)
+{
+	if (!CombatWeapon || WorldTransform.ContainsNaN())
+	{
+		return false;
+	}
+
+	CombatWeapon->SetWorldTransform(
+		WorldTransform,
+		false,
+		nullptr,
+		ETeleportType::TeleportPhysics);
+	return true;
+}
+
+void ARoverCharacter::RestoreCombatWeaponAttachment(const ERoverWeaponHand WeaponHand)
+{
+	if (!CombatWeapon)
+	{
+		return;
+	}
+
+	CombatWeapon->SetSimulatePhysics(false);
+	CombatWeapon->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	SetCombatWeaponHand(WeaponHand);
+}
+
 bool ARoverCharacter::TryBeginCombatMovementRestriction(const int32 RequestId)
 {
 	return LocomotionComponent && LocomotionComponent->TryBeginCombatMovementRestriction(RequestId);
+}
+
+bool ARoverCharacter::TryBeginAirCombatMovementRestriction(
+	const int32 RequestId,
+	const float HorizontalVelocityScale)
+{
+	return LocomotionComponent && LocomotionComponent->TryBeginAirCombatMovementRestriction(
+		RequestId,
+		HorizontalVelocityScale);
+}
+
+bool ARoverCharacter::BeginAirCombatAscent(
+	const int32 RequestId,
+	const float AscentHeight,
+	const float AscentDuration)
+{
+	return LocomotionComponent && LocomotionComponent->BeginAirCombatAscent(
+		RequestId,
+		AscentHeight,
+		AscentDuration);
+}
+
+bool ARoverCharacter::BeginAirCombatDescent(const int32 RequestId, const float DescentSpeed)
+{
+	return LocomotionComponent && LocomotionComponent->BeginAirCombatDescent(RequestId, DescentSpeed);
 }
 
 bool ARoverCharacter::TransferCombatMovementRestriction(const int32 PreviousRequestId, const int32 NewRequestId)
@@ -692,6 +784,27 @@ void ARoverCharacter::EndCombatMovementRestriction(
 	{
 		LocomotionComponent->EndCombatMovementRestriction(RequestId, bRestorePhysicsPush);
 	}
+}
+
+FVector ARoverCharacter::GetCombatDirectionIntent() const
+{
+	return LocomotionComponent
+		? LocomotionComponent->GetMoveWorldDirection().GetSafeNormal2D()
+		: FVector::ZeroVector;
+}
+
+bool ARoverCharacter::FaceCombatDirection(const FVector& WorldDirection)
+{
+	const FVector Direction = WorldDirection.GetSafeNormal2D();
+	if (Direction.IsNearlyZero())
+	{
+		return false;
+	}
+
+	FRotator Rotation = GetActorRotation();
+	Rotation.Yaw = Direction.Rotation().Yaw;
+	SetActorRotation(Rotation);
+	return true;
 }
 
 bool ARoverCharacter::StartCombatAttackAdvance(
@@ -716,6 +829,14 @@ void ARoverCharacter::PlayCombatAttackImmediately(const int32 RequestId)
 	if (URoverAnimInstance* AnimInstance = GetMesh() ? Cast<URoverAnimInstance>(GetMesh()->GetAnimInstance()) : nullptr)
 	{
 		AnimInstance->PlayAttackRequestImmediately(RequestId);
+	}
+}
+
+void ARoverCharacter::TransitionAirAttackToLanding(const int32 RequestId)
+{
+	if (URoverAnimInstance* AnimInstance = GetMesh() ? Cast<URoverAnimInstance>(GetMesh()->GetAnimInstance()) : nullptr)
+	{
+		AnimInstance->TransitionAirAttackToLanding(RequestId);
 	}
 }
 
@@ -798,6 +919,11 @@ void ARoverCharacter::HandleAttackStartedNotify(const int32 RequestId)
 	if (CombatComponent) CombatComponent->AcknowledgeAttackStarted(RequestId);
 }
 
+void ARoverCharacter::HandleAirAttackApexNotify(const int32 RequestId)
+{
+	if (CombatComponent) CombatComponent->ReachAirAttackApex(RequestId);
+}
+
 void ARoverCharacter::HandleAttackActiveBeginNotify(const int32 RequestId)
 {
 	if (CombatComponent) CombatComponent->BeginAttackActive(RequestId);
@@ -816,6 +942,16 @@ void ARoverCharacter::HandleComboWindowBeginNotify(const int32 RequestId)
 void ARoverCharacter::HandleComboWindowEndNotify(const int32 RequestId)
 {
 	if (CombatComponent) CombatComponent->EndComboWindow(RequestId);
+}
+
+void ARoverCharacter::HandleResonanceWindowBeginNotify(const int32 RequestId)
+{
+	if (CombatComponent) CombatComponent->BeginResonanceWindow(RequestId);
+}
+
+void ARoverCharacter::HandleResonanceWindowEndNotify(const int32 RequestId)
+{
+	if (CombatComponent) CombatComponent->EndResonanceWindow(RequestId);
 }
 
 void ARoverCharacter::HandleAttackRecoveryBeginNotify(const int32 RequestId)

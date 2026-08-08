@@ -39,7 +39,9 @@
 #include "Misc/ScopeExit.h"
 #include "RoverAnimInstance.h"
 #include "RoverAnimNotifyState_ComboWindow.h"
+#include "RoverAnimNotifyState_ResonanceWindow.h"
 #include "RoverCombatConfig.h"
+#include "RoverMovementConfig.h"
 
 namespace
 {
@@ -47,6 +49,7 @@ constexpr TCHAR AnimationRoot[] = TEXT("/Game/Rover/Animations/P0");
 constexpr TCHAR BlendSpaceRoot[] = TEXT("/Game/Rover/Animations/BlendSpaces");
 constexpr TCHAR CombatMontageRoot[] = TEXT("/Game/Rover/Combat/Montages");
 constexpr TCHAR CombatConfigAssetPath[] = TEXT("/Game/Rover/Combat/DA_RoverCombatConfig");
+constexpr TCHAR MovementConfigObjectPath[] = TEXT("/Game/Rover/Config/DA_RoverMovementConfig.DA_RoverMovementConfig");
 const FName MoveStopRootBoneName(TEXT("root"));
 const FName MoveStopBodyBoneName(TEXT("Bip001"));
 constexpr double MoveStopSignificantTravel = 1.0;
@@ -480,7 +483,9 @@ UAnimStateTransitionNode* AddTransition(
 	const FName RuleProperty,
 	const int32 Priority,
 	const bool bAutomatic = false,
-	const ETransitionLogicType::Type LogicType = ETransitionLogicType::TLT_StandardBlend)
+	const ETransitionLogicType::Type LogicType = ETransitionLogicType::TLT_StandardBlend,
+	const float CrossfadeDuration = 0.12f,
+	const EAlphaBlendOption BlendMode = EAlphaBlendOption::Linear)
 {
 	FGraphNodeCreator<UAnimStateTransitionNode> Creator(MachineGraph);
 	UAnimStateTransitionNode* Transition = Creator.CreateNode(false);
@@ -489,7 +494,8 @@ UAnimStateTransitionNode* AddTransition(
 	// PostPlacedNewNode enables self-transition inertialization during Finalize.
 	// Apply the project transition policy only after the node is initialized.
 	Transition->PriorityOrder = Priority;
-	Transition->CrossfadeDuration = 0.12f;
+	Transition->CrossfadeDuration = FMath::Max(0.0f, CrossfadeDuration);
+	Transition->BlendMode = BlendMode;
 	Transition->LogicType = LogicType;
 	Transition->bAllowInertializationForSelfTransitions = false;
 	Transition->bAutomaticRuleBasedOnSequencePlayerInState = bAutomatic;
@@ -512,6 +518,19 @@ UAnimStateTransitionNode* AddTransition(
 	}
 
 	return Transition;
+}
+
+float ResolveRunTurnbackBlendOutDuration()
+{
+	if (const URoverMovementConfig* MovementConfig =
+		LoadObject<URoverMovementConfig>(nullptr, MovementConfigObjectPath))
+	{
+		return FMath::Clamp(
+			MovementConfig->Settings.RunTurnbackBlendOutDuration,
+			0.05f,
+			0.5f);
+	}
+	return 0.22f;
 }
 
 bool BuildGroundedPose(UAnimStateNode* State)
@@ -784,6 +803,22 @@ void AddComboWindowNotifyState(UAnimMontage& Montage, const float StartNormalize
 	Notify.EndLink.Link(&Montage, Notify.EndLink.GetTime());
 }
 
+void AddResonanceWindowNotifyState(UAnimMontage& Montage, const float StartNormalized)
+{
+	const float MontageLength = Montage.GetPlayLength();
+	const float StartTime = MontageLength * FMath::Clamp(StartNormalized, 0.0f, 1.0f);
+	FAnimNotifyEvent& Notify = Montage.Notifies.AddDefaulted_GetRef();
+	Notify.NotifyStateClass = NewObject<URoverAnimNotifyState_ResonanceWindow>(&Montage);
+	Notify.NotifyName = TEXT("ResonanceWindow");
+#if WITH_EDITORONLY_DATA
+	Notify.Guid = FGuid::NewGuid();
+#endif
+	Notify.Link(&Montage, StartTime);
+	Notify.TrackIndex = 0;
+	Notify.SetDuration(FMath::Max(0.0f, MontageLength - StartTime));
+	Notify.EndLink.Link(&Montage, Notify.EndLink.GetTime());
+}
+
 UAnimMontage* CreateOrUpdateMontage(
 	IAssetTools& AssetTools,
 	UAnimSequence& SourceSequence,
@@ -930,11 +965,6 @@ bool HasValidComboWindowState(
 	const UAnimMontage& Montage,
 	const FRoverAttackDefinition& Definition)
 {
-	if (Montage.Notifies.Num() != 6)
-	{
-		return false;
-	}
-
 	const FAnimNotifyEvent* ComboWindow = FindNamedNotify(Montage, TEXT("ComboWindow"));
 	if (!ComboWindow)
 	{
@@ -947,6 +977,21 @@ bool HasValidComboWindowState(
 		ComboWindow->NotifyStateClass->IsA<URoverAnimNotifyState_ComboWindow>() &&
 		FMath::IsNearlyEqual(ComboWindow->GetTriggerTime(), ExpectedStart, 0.002f) &&
 		FMath::IsNearlyEqual(ComboWindow->GetEndTriggerTime(), MontageLength, 0.002f);
+}
+
+bool HasValidResonanceWindowState(const UAnimMontage& Montage, const float StartNormalized)
+{
+	const FAnimNotifyEvent* ResonanceWindow = FindNamedNotify(Montage, TEXT("ResonanceWindow"));
+	if (!ResonanceWindow)
+	{
+		return false;
+	}
+	const float MontageLength = Montage.GetPlayLength();
+	const float ExpectedStart = MontageLength * FMath::Clamp(StartNormalized, 0.0f, 1.0f);
+	return ResonanceWindow->NotifyStateClass &&
+		ResonanceWindow->NotifyStateClass->IsA<URoverAnimNotifyState_ResonanceWindow>() &&
+		FMath::IsNearlyEqual(ResonanceWindow->GetTriggerTime(), ExpectedStart, 0.002f) &&
+		FMath::IsNearlyEqual(ResonanceWindow->GetEndTriggerTime(), MontageLength, 0.002f);
 }
 
 bool HasValidAttackAssetSettings(
@@ -1423,7 +1468,16 @@ UAnimBlueprint* URoverAnimationEditorLibrary::CreateRoverAnimBlueprint(
 		AddTransition(*MachineGraph, TurnInPlace, Grounded, NAME_None, 3, true) &&
 		AddTransition(*MachineGraph, RunTurnback, JumpStart, GET_MEMBER_NAME_CHECKED(URoverAnimInstance, bJumpStartRequested), 1) &&
 		AddTransition(*MachineGraph, RunTurnback, Airborne, GET_MEMBER_NAME_CHECKED(URoverAnimInstance, bIsFalling), 2) &&
-		AddTransition(*MachineGraph, RunTurnback, Grounded, NAME_None, 3, true) &&
+		AddTransition(
+			*MachineGraph,
+			RunTurnback,
+			Grounded,
+			GET_MEMBER_NAME_CHECKED(URoverAnimInstance, bRunTurnbackShouldExit),
+			3,
+			false,
+			ETransitionLogicType::TLT_StandardBlend,
+			ResolveRunTurnbackBlendOutDuration(),
+			EAlphaBlendOption::Cubic) &&
 		AddTransition(*MachineGraph, MoveStop, JumpStart, GET_MEMBER_NAME_CHECKED(URoverAnimInstance, bJumpStartRequested), 1) &&
 		AddTransition(*MachineGraph, MoveStop, Airborne, GET_MEMBER_NAME_CHECKED(URoverAnimInstance, bIsFalling), 2) &&
 		AddTransition(
@@ -1501,7 +1555,9 @@ bool URoverAnimationEditorLibrary::CreateRoverCombatP0Assets(
 		return false;
 	}
 	CombatConfig->Modify();
-	CombatConfig->Settings.LightAttackChain.SetNum(3);
+	CombatConfig->Settings.LightAttackChain.SetNum(FMath::Max(
+		3,
+		CombatConfig->Settings.LightAttackChain.Num()));
 	for (FRoverAttackDefinition& AttackDefinition : CombatConfig->Settings.LightAttackChain)
 	{
 		AttackDefinition.AnimPlayRate = 1.3f; // [PLACEHOLDER] Tune after animation review.
@@ -1699,6 +1755,463 @@ bool URoverAnimationEditorLibrary::CreateRoverCombatP0Assets(
 	return true;
 }
 
+bool URoverAnimationEditorLibrary::CreateRoverLightAttackAsset(
+	UAnimSequence* AttackSequence,
+	const int32 ComboIndex,
+	FString& ValidationReport)
+{
+	ValidationReport.Reset();
+	if (!IsValid(AttackSequence) || !IsValid(AttackSequence->GetSkeleton()) || ComboIndex < 1)
+	{
+		ValidationReport = TEXT("A valid Rover attack sequence and a positive combo index are required.");
+		return false;
+	}
+
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+	URoverCombatConfig* CombatConfig = CreateOrLoadCombatConfig(AssetTools);
+	if (!CombatConfig)
+	{
+		ValidationReport = TEXT("Failed to load the Rover combat config asset.");
+		return false;
+	}
+
+	CombatConfig->Modify();
+	const bool bNewDefinition = CombatConfig->Settings.LightAttackChain.Num() < ComboIndex;
+	CombatConfig->Settings.LightAttackChain.SetNum(FMath::Max(
+		ComboIndex,
+		CombatConfig->Settings.LightAttackChain.Num()));
+	FRoverAttackDefinition& Definition = CombatConfig->Settings.LightAttackChain[ComboIndex - 1];
+	if (bNewDefinition)
+	{
+		Definition.WeaponHand = ERoverWeaponHand::Right;
+		Definition.AnimPlayRate = 1.3f; // [PLACEHOLDER]
+		Definition.MontageBlendInTime = 0.05f;
+		Definition.MontageBlendOutTime = ComboIndex >= 4 ? 0.25f : 0.10f; // [PLACEHOLDER]
+		Definition.MontageBlendOutTriggerTime = Definition.MontageBlendOutTime;
+		Definition.ComboWindowStartNormalized = 0.5f;
+		Definition.Damage = 40.0f; // [PLACEHOLDER]
+		Definition.PoiseDamage = 30.0f; // [PLACEHOLDER]
+		Definition.EnvironmentImpulseStrength = 900.0f; // [PLACEHOLDER]
+		Definition.TraceRadius = 12.0f; // [PLACEHOLDER]
+		Definition.TraceSampleCount = 7; // [PLACEHOLDER]
+		Definition.TraceSubstepDistance = 10.0f; // [PLACEHOLDER]
+		Definition.MaxTraceSubsteps = 8; // [PLACEHOLDER]
+		Definition.AdvanceDistance = 60.0f; // [PLACEHOLDER]
+		Definition.AdvanceDuration = 0.28f; // [PLACEHOLDER]
+	}
+
+	AttackSequence->Modify();
+	AttackSequence->bEnableRootMotion = false;
+	AttackSequence->bForceRootLock = true;
+	AttackSequence->RootMotionRootLock = ERootMotionRootLock::RefPose;
+	AttackSequence->PostEditChange();
+	AttackSequence->MarkPackageDirty();
+	const float Length = AttackSequence->GetPlayLength();
+	const float StartedTime = FMath::Min(0.01f, Length * 0.02f);
+	const FString MontageName = FString::Printf(TEXT("AM_Rover_Attack%02d"), ComboIndex);
+	UAnimMontage* Montage = CreateOrUpdateMontage(
+		AssetTools,
+		*AttackSequence,
+		*MontageName,
+		{
+			{TEXT("RoverAttackStarted"), StartedTime},
+			{TEXT("RoverAttackActiveBegin"), Length * 0.12f},
+			{TEXT("RoverAttackActiveEnd"), Length * 0.42f},
+			{TEXT("RoverRecoveryBegin"), Length * 0.75f},
+			{TEXT("RoverAttackFinished"), FMath::Max(StartedTime, Length - 0.01f)}
+		},
+		&Definition);
+	if (!Montage)
+	{
+		ValidationReport = TEXT("Failed to create the Rover light-attack Montage.");
+		return false;
+	}
+
+	Definition.Montage = Montage;
+	CombatConfig->PostEditChange();
+	CombatConfig->MarkPackageDirty();
+	const TArray<FName> ExpectedNotifies = {
+		TEXT("RoverAttackStarted"),
+		TEXT("RoverAttackActiveBegin"),
+		TEXT("RoverAttackActiveEnd"),
+		TEXT("ComboWindow"),
+		TEXT("RoverRecoveryBegin"),
+		TEXT("RoverAttackFinished")};
+	const bool bValid = HasNamedNotifies(*Montage, ExpectedNotifies) &&
+		HasValidAttackNotifyOrder(*Montage) &&
+		HasValidComboWindowState(*Montage, Definition) &&
+		HasValidAttackAssetSettings(*AttackSequence, *Montage, Definition) &&
+		Montage->SlotAnimTracks.Num() == 1 &&
+		Montage->SlotAnimTracks[0].SlotName == TEXT("DefaultSlot");
+	ValidationReport = FString::Printf(
+		TEXT("combo=%d sequence=%s montage=%s length=%.3f notifies=%d order=%d window=%d settings=%d"),
+		ComboIndex,
+		*AttackSequence->GetPathName(),
+		*Montage->GetPathName(),
+		Length,
+		HasNamedNotifies(*Montage, ExpectedNotifies),
+		HasValidAttackNotifyOrder(*Montage),
+		HasValidComboWindowState(*Montage, Definition),
+		HasValidAttackAssetSettings(*AttackSequence, *Montage, Definition));
+	return bValid;
+}
+
+bool URoverAnimationEditorLibrary::CreateRoverHeavyAttackAsset(
+	UAnimSequence* AttackSequence,
+	FString& ValidationReport)
+{
+	ValidationReport.Reset();
+	if (!IsValid(AttackSequence) || !IsValid(AttackSequence->GetSkeleton()))
+	{
+		ValidationReport = TEXT("A valid Rover heavy-attack sequence is required.");
+		return false;
+	}
+
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+	URoverCombatConfig* CombatConfig = CreateOrLoadCombatConfig(AssetTools);
+	if (!CombatConfig)
+	{
+		ValidationReport = TEXT("Failed to load the Rover combat config asset.");
+		return false;
+	}
+
+	CombatConfig->Modify();
+	FRoverAttackDefinition& Definition = CombatConfig->Settings.HeavyAttackDefinition;
+	AttackSequence->Modify();
+	AttackSequence->bEnableRootMotion = false;
+	AttackSequence->bForceRootLock = true;
+	AttackSequence->RootMotionRootLock = ERootMotionRootLock::RefPose;
+	AttackSequence->PostEditChange();
+	AttackSequence->MarkPackageDirty();
+
+	const float Length = AttackSequence->GetPlayLength();
+	const float StartedTime = FMath::Min(0.01f, Length * 0.02f);
+	UAnimMontage* Montage = CreateOrUpdateMontage(
+		AssetTools,
+		*AttackSequence,
+		TEXT("AM_Rover_Attack05"),
+		{
+			{TEXT("RoverAttackStarted"), StartedTime},
+			{TEXT("RoverAttackActiveBegin"), Length * 0.12f},
+			{TEXT("RoverAttackActiveEnd"), Length * 0.42f},
+			{TEXT("RoverRecoveryBegin"), Length * 0.75f},
+			{TEXT("RoverAttackFinished"), FMath::Max(StartedTime, Length - 0.01f)}
+		},
+		&Definition);
+	if (!Montage)
+	{
+		ValidationReport = TEXT("Failed to create the Rover heavy-attack Montage.");
+		return false;
+	}
+
+	Definition.Montage = Montage;
+	CombatConfig->PostEditChange();
+	CombatConfig->MarkPackageDirty();
+	const TArray<FName> ExpectedNotifies = {
+		TEXT("RoverAttackStarted"),
+		TEXT("RoverAttackActiveBegin"),
+		TEXT("RoverAttackActiveEnd"),
+		TEXT("ComboWindow"),
+		TEXT("RoverRecoveryBegin"),
+		TEXT("RoverAttackFinished")};
+	const bool bValid = HasNamedNotifies(*Montage, ExpectedNotifies) &&
+		HasValidAttackNotifyOrder(*Montage) &&
+		HasValidComboWindowState(*Montage, Definition) &&
+		HasValidAttackAssetSettings(*AttackSequence, *Montage, Definition) &&
+		Montage->SlotAnimTracks.Num() == 1 &&
+		Montage->SlotAnimTracks[0].SlotName == TEXT("DefaultSlot");
+	ValidationReport = FString::Printf(
+		TEXT("type=heavy sequence=%s montage=%s length=%.3f notifies=%d order=%d window=%d settings=%d"),
+		*AttackSequence->GetPathName(),
+		*Montage->GetPathName(),
+		Length,
+		HasNamedNotifies(*Montage, ExpectedNotifies),
+		HasValidAttackNotifyOrder(*Montage),
+		HasValidComboWindowState(*Montage, Definition),
+		HasValidAttackAssetSettings(*AttackSequence, *Montage, Definition));
+	return bValid;
+}
+
+bool URoverAnimationEditorLibrary::CreateRoverHeavyResonanceAsset(
+	UAnimSequence* AttackSequence,
+	FString& ValidationReport)
+{
+	ValidationReport.Reset();
+	if (!IsValid(AttackSequence) || !IsValid(AttackSequence->GetSkeleton()))
+	{
+		ValidationReport = TEXT("A valid Rover heavy-resonance sequence is required.");
+		return false;
+	}
+
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+	URoverCombatConfig* CombatConfig = CreateOrLoadCombatConfig(AssetTools);
+	if (!CombatConfig || !CombatConfig->Settings.LightAttackChain.IsValidIndex(2))
+	{
+		ValidationReport = TEXT("The Rover combat config or Attack03 definition is missing.");
+		return false;
+	}
+
+	CombatConfig->Modify();
+	FRoverAttackDefinition& Definition = CombatConfig->Settings.HeavyResonanceDefinition;
+	AttackSequence->Modify();
+	AttackSequence->bEnableRootMotion = false;
+	AttackSequence->bForceRootLock = true;
+	AttackSequence->RootMotionRootLock = ERootMotionRootLock::RefPose;
+	AttackSequence->PostEditChange();
+	AttackSequence->MarkPackageDirty();
+
+	const float Length = AttackSequence->GetPlayLength();
+	const float StartedTime = FMath::Min(0.01f, Length * 0.02f);
+	UAnimMontage* Montage = CreateOrUpdateMontage(
+		AssetTools,
+		*AttackSequence,
+		TEXT("AM_Rover_Attack_EX01"),
+		{
+			{TEXT("RoverAttackStarted"), StartedTime},
+			{TEXT("RoverAttackActiveBegin"), Length * 0.12f},
+			{TEXT("RoverAttackActiveEnd"), Length * 0.42f},
+			{TEXT("RoverRecoveryBegin"), Length * 0.75f},
+			{TEXT("RoverAttackFinished"), FMath::Max(StartedTime, Length - 0.01f)}
+		},
+		&Definition);
+	if (!Montage)
+	{
+		ValidationReport = TEXT("Failed to create the Rover heavy-resonance Montage.");
+		return false;
+	}
+	Definition.Montage = Montage;
+
+	UAnimMontage* Attack03Montage = CombatConfig->Settings.LightAttackChain[2].Montage.LoadSynchronous();
+	if (!Attack03Montage)
+	{
+		ValidationReport = TEXT("Attack03 Montage is missing; cannot install the ResonanceWindow.");
+		return false;
+	}
+	Attack03Montage->Modify();
+	Attack03Montage->Notifies.RemoveAll([](const FAnimNotifyEvent& Notify)
+	{
+		return Notify.NotifyName == TEXT("ResonanceWindow") ||
+			(Notify.NotifyStateClass && Notify.NotifyStateClass->IsA<URoverAnimNotifyState_ResonanceWindow>());
+	});
+	const float ComboStart = FMath::Clamp(
+		CombatConfig->Settings.LightAttackChain[2].ComboWindowStartNormalized,
+		0.0f,
+		1.0f);
+	const float ResonanceStart = FMath::Lerp(
+		ComboStart,
+		1.0f,
+		FMath::Clamp(CombatConfig->Settings.ResonanceHalfWindowNormalized, 0.0f, 1.0f));
+	AddResonanceWindowNotifyState(*Attack03Montage, ResonanceStart);
+	Attack03Montage->SortNotifies();
+	Attack03Montage->PostEditChange();
+	Attack03Montage->MarkPackageDirty();
+
+	CombatConfig->PostEditChange();
+	CombatConfig->MarkPackageDirty();
+	const TArray<FName> ExpectedNotifies = {
+		TEXT("RoverAttackStarted"),
+		TEXT("RoverAttackActiveBegin"),
+		TEXT("RoverAttackActiveEnd"),
+		TEXT("ComboWindow"),
+		TEXT("RoverRecoveryBegin"),
+		TEXT("RoverAttackFinished")};
+	const bool bValid = HasNamedNotifies(*Montage, ExpectedNotifies) &&
+		HasValidAttackNotifyOrder(*Montage) &&
+		HasValidComboWindowState(*Montage, Definition) &&
+		HasValidAttackAssetSettings(*AttackSequence, *Montage, Definition) &&
+		HasValidResonanceWindowState(*Attack03Montage, ResonanceStart) &&
+		Montage->SlotAnimTracks.Num() == 1 &&
+		Montage->SlotAnimTracks[0].SlotName == TEXT("DefaultSlot");
+	ValidationReport = FString::Printf(
+		TEXT("type=resonance sequence=%s montage=%s length=%.3f attack03_window=%.3f definition=%d window=%d"),
+		*AttackSequence->GetPathName(),
+		*Montage->GetPathName(),
+		Length,
+		ResonanceStart,
+		HasValidAttackAssetSettings(*AttackSequence, *Montage, Definition),
+		HasValidResonanceWindowState(*Attack03Montage, ResonanceStart));
+	return bValid;
+}
+
+bool URoverAnimationEditorLibrary::CreateRoverAirAttackAsset(
+	UAnimSequence* StartSequence,
+	UAnimSequence* LoopSequence,
+	UAnimSequence* EndSequence,
+	FString& ValidationReport)
+{
+	ValidationReport.Reset();
+	if (!IsValid(StartSequence) || !IsValid(LoopSequence) || !IsValid(EndSequence) ||
+		!IsValid(StartSequence->GetSkeleton()) ||
+		StartSequence->GetSkeleton() != LoopSequence->GetSkeleton() ||
+		StartSequence->GetSkeleton() != EndSequence->GetSkeleton())
+	{
+		ValidationReport = TEXT("AirAttack Start, Loop, and End sequences must use the same valid Rover skeleton.");
+		return false;
+	}
+	if (StartSequence->GetPlayLength() <= UE_SMALL_NUMBER ||
+		LoopSequence->GetPlayLength() <= UE_SMALL_NUMBER ||
+		EndSequence->GetPlayLength() <= UE_SMALL_NUMBER)
+	{
+		ValidationReport = TEXT("AirAttack sequences must all contain animation data.");
+		return false;
+	}
+
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+	URoverCombatConfig* CombatConfig = CreateOrLoadCombatConfig(AssetTools);
+	if (!CombatConfig)
+	{
+		ValidationReport = TEXT("Failed to load the Rover combat config asset.");
+		return false;
+	}
+
+	CombatConfig->Modify();
+	FRoverCombatSettings& Settings = CombatConfig->Settings;
+	FRoverAttackDefinition& Definition = Settings.AirAttackDefinition;
+	for (UAnimSequence* Sequence : {StartSequence, LoopSequence, EndSequence})
+	{
+		Sequence->Modify();
+		Sequence->bEnableRootMotion = false;
+		Sequence->bForceRootLock = true;
+		Sequence->RootMotionRootLock = ERootMotionRootLock::RefPose;
+		Sequence->PostEditChange();
+		Sequence->MarkPackageDirty();
+	}
+
+	constexpr TCHAR MontageName[] = TEXT("AM_Rover_AirAttack");
+	const FString MontagePath = FString::Printf(TEXT("%s/%s"), CombatMontageRoot, MontageName);
+	const FString MontageObjectPath = FString::Printf(TEXT("%s.%s"), *MontagePath, MontageName);
+	UAnimMontage* Montage = LoadObject<UAnimMontage>(nullptr, *MontageObjectPath);
+	if (!Montage)
+	{
+		UAnimMontageFactory* Factory = NewObject<UAnimMontageFactory>();
+		Factory->TargetSkeleton = StartSequence->GetSkeleton();
+		Factory->SourceAnimation = StartSequence;
+		Montage = Cast<UAnimMontage>(AssetTools.CreateAsset(
+			MontageName,
+			CombatMontageRoot,
+			UAnimMontage::StaticClass(),
+			Factory));
+	}
+	if (!Montage)
+	{
+		ValidationReport = TEXT("Failed to create the Rover AirAttack Montage.");
+		return false;
+	}
+
+	const float StartLength = StartSequence->GetPlayLength();
+	const float LoopLength = LoopSequence->GetPlayLength();
+	const float EndLength = EndSequence->GetPlayLength();
+	const float EndStartTime = StartLength + LoopLength;
+	const float TotalLength = EndStartTime + EndLength;
+	Montage->Modify();
+	Montage->SetSkeleton(StartSequence->GetSkeleton());
+	Montage->SlotAnimTracks.Reset();
+	FSlotAnimationTrack SlotTrack;
+	SlotTrack.SlotName = TEXT("DefaultSlot");
+	auto AddSegment = [&SlotTrack](UAnimSequence& Sequence, const float StartPosition)
+	{
+		FAnimSegment Segment;
+		Segment.SetAnimReference(&Sequence, true);
+		Segment.StartPos = StartPosition;
+		SlotTrack.AnimTrack.AnimSegments.Add(Segment);
+	};
+	AddSegment(*StartSequence, 0.0f);
+	AddSegment(*LoopSequence, StartLength);
+	AddSegment(*EndSequence, EndStartTime);
+	Montage->SlotAnimTracks.Add(MoveTemp(SlotTrack));
+	Montage->SetCompositeLength(TotalLength);
+	Montage->CompositeSections.Reset();
+	const int32 StartSectionIndex = Montage->AddAnimCompositeSection(TEXT("Start"), 0.0f);
+	const int32 LoopSectionIndex = Montage->AddAnimCompositeSection(TEXT("Loop"), StartLength);
+	const int32 EndSectionIndex = Montage->AddAnimCompositeSection(TEXT("End"), EndStartTime);
+	if (!Montage->CompositeSections.IsValidIndex(StartSectionIndex) ||
+		!Montage->CompositeSections.IsValidIndex(LoopSectionIndex) ||
+		!Montage->CompositeSections.IsValidIndex(EndSectionIndex))
+	{
+		ValidationReport = TEXT("Failed to create AirAttack Montage sections.");
+		return false;
+	}
+	Montage->CompositeSections[StartSectionIndex].NextSectionName = TEXT("Loop");
+	Montage->CompositeSections[LoopSectionIndex].NextSectionName = TEXT("Loop");
+	Montage->CompositeSections[EndSectionIndex].NextSectionName = NAME_None;
+	Montage->BlendModeIn = EMontageBlendMode::Standard;
+	Montage->BlendModeOut = EMontageBlendMode::Standard;
+	Montage->BlendIn.SetBlendTime(FMath::Max(0.0f, Definition.MontageBlendInTime));
+	Montage->BlendOut.SetBlendTime(FMath::Max(0.0f, Definition.MontageBlendOutTime));
+	Montage->BlendOutTriggerTime = FMath::Max(0.0f, Definition.MontageBlendOutTriggerTime);
+	Montage->bEnableAutoBlendOut = true;
+	Montage->Notifies.Reset();
+	USkeleton* Skeleton = StartSequence->GetSkeleton();
+	const float StartedTime = FMath::Min(0.01f, StartLength * 0.02f);
+	const IAnimationDataModel* StartDataModel = StartSequence->GetDataModel();
+	const FFrameRate StartFrameRate = StartDataModel
+		? StartDataModel->GetFrameRate()
+		: StartSequence->GetSamplingFrameRate();
+	const int32 MaximumApexFrame = StartDataModel
+		? FMath::Max(1, StartDataModel->GetNumberOfFrames())
+		: FMath::Max(1, StartSequence->GetNumberOfSampledKeys() - 1);
+	const int32 ApexFrame = FMath::Clamp(Settings.AirAttackApexFrame, 1, MaximumApexFrame);
+	const float ApexTime = FMath::Clamp(
+		static_cast<float>(StartFrameRate.AsSeconds(FFrameTime(ApexFrame))),
+		StartedTime + UE_KINDA_SMALL_NUMBER,
+		StartLength - UE_KINDA_SMALL_NUMBER);
+	AddNamedMontageNotify(*Montage, *Skeleton, TEXT("RoverAttackStarted"), StartedTime);
+	AddNamedMontageNotify(*Montage, *Skeleton, TEXT("RoverAirAttackApex"), ApexTime);
+	AddNamedMontageNotify(*Montage, *Skeleton, TEXT("RoverAttackActiveBegin"), StartLength * 0.35f);
+	AddNamedMontageNotify(*Montage, *Skeleton, TEXT("RoverAttackActiveEnd"), EndStartTime + EndLength * 0.55f);
+	AddNamedMontageNotify(*Montage, *Skeleton, TEXT("RoverRecoveryBegin"), EndStartTime + EndLength * 0.72f);
+	AddNamedMontageNotify(*Montage, *Skeleton, TEXT("RoverAttackFinished"), FMath::Max(StartedTime, TotalLength - 0.01f));
+	Montage->SortNotifies();
+	Montage->PostEditChange();
+	Montage->MarkPackageDirty();
+	Skeleton->MarkPackageDirty();
+
+	Definition.Montage = Montage;
+	CombatConfig->PostEditChange();
+	CombatConfig->MarkPackageDirty();
+	const TArray<FName> ExpectedNotifies = {
+		TEXT("RoverAttackStarted"),
+		TEXT("RoverAirAttackApex"),
+		TEXT("RoverAttackActiveBegin"),
+		TEXT("RoverAttackActiveEnd"),
+		TEXT("RoverRecoveryBegin"),
+		TEXT("RoverAttackFinished")};
+	const FAnimNotifyEvent* Started = FindNamedNotify(*Montage, TEXT("RoverAttackStarted"));
+	const FAnimNotifyEvent* Apex = FindNamedNotify(*Montage, TEXT("RoverAirAttackApex"));
+	const FAnimNotifyEvent* ActiveBegin = FindNamedNotify(*Montage, TEXT("RoverAttackActiveBegin"));
+	const FAnimNotifyEvent* ActiveEnd = FindNamedNotify(*Montage, TEXT("RoverAttackActiveEnd"));
+	const FAnimNotifyEvent* Recovery = FindNamedNotify(*Montage, TEXT("RoverRecoveryBegin"));
+	const FAnimNotifyEvent* Finished = FindNamedNotify(*Montage, TEXT("RoverAttackFinished"));
+	const bool bValidNotifyOrder = Started && Apex && ActiveBegin && ActiveEnd && Recovery && Finished &&
+		Started->GetTriggerTime() < Apex->GetTriggerTime() &&
+		Apex->GetTriggerTime() < StartLength &&
+		Started->GetTriggerTime() < ActiveBegin->GetTriggerTime() &&
+		ActiveBegin->GetTriggerTime() < ActiveEnd->GetTriggerTime() &&
+		ActiveEnd->GetTriggerTime() < Recovery->GetTriggerTime() &&
+		Recovery->GetTriggerTime() < Finished->GetTriggerTime();
+	const bool bValidSections = Montage->CompositeSections.Num() == 3 &&
+		Montage->CompositeSections[StartSectionIndex].NextSectionName == TEXT("Loop") &&
+		Montage->CompositeSections[LoopSectionIndex].NextSectionName == TEXT("Loop") &&
+		Montage->CompositeSections[EndSectionIndex].NextSectionName.IsNone();
+	const bool bValid = HasNamedNotifies(*Montage, ExpectedNotifies) && bValidNotifyOrder &&
+		bValidSections && HasValidAttackAssetSettings(*StartSequence, *Montage, Definition) &&
+		Montage->SlotAnimTracks.Num() == 1 &&
+		Montage->SlotAnimTracks[0].AnimTrack.AnimSegments.Num() == 3 &&
+		Montage->SlotAnimTracks[0].SlotName == TEXT("DefaultSlot");
+	ValidationReport = FString::Printf(
+		TEXT("type=air sections=%d loop=%d notifies=%d order=%d apex_frame=%d apex_time=%.3f fps=%.3f montage=%s length=%.3f"),
+		Montage->CompositeSections.Num(),
+		bValidSections,
+		HasNamedNotifies(*Montage, ExpectedNotifies),
+		bValidNotifyOrder,
+		ApexFrame,
+		ApexTime,
+		StartFrameRate.AsDecimal(),
+		*Montage->GetPathName(),
+		TotalLength);
+	return bValid;
+}
+
 bool URoverAnimationEditorLibrary::ValidateRoverAttackMontage(
 	const UAnimSequence* AttackSequence,
 	const UAnimMontage* AttackMontage,
@@ -1727,6 +2240,16 @@ bool URoverAnimationEditorLibrary::ValidateRoverAttackMontage(
 			MatchingDefinition = &Definition;
 			break;
 		}
+	}
+	if (!MatchingDefinition &&
+		CombatConfig->Settings.HeavyAttackDefinition.Montage.LoadSynchronous() == AttackMontage)
+	{
+		MatchingDefinition = &CombatConfig->Settings.HeavyAttackDefinition;
+	}
+	if (!MatchingDefinition &&
+		CombatConfig->Settings.HeavyResonanceDefinition.Montage.LoadSynchronous() == AttackMontage)
+	{
+		MatchingDefinition = &CombatConfig->Settings.HeavyResonanceDefinition;
 	}
 	if (!MatchingDefinition)
 	{
@@ -2115,8 +2638,7 @@ bool URoverAnimationEditorLibrary::ValidateRoverAnimBlueprint(
 		TEXT("SprintImpulse->Grounded"),
 		TEXT("JumpStart->Airborne"),
 		TEXT("SecondJump->Airborne"),
-		TEXT("TurnInPlace->Grounded"),
-		TEXT("RunTurnback->Grounded")};
+		TEXT("TurnInPlace->Grounded")};
 	const TMap<FString, int32> ExpectedTransitionPriorities = {
 		{TEXT("Grounded->JumpStart"), 1}, {TEXT("Grounded->SprintImpulse"), 2}, {TEXT("Grounded->Airborne"), 3}, {TEXT("Grounded->MoveStop"), 4}, {TEXT("Grounded->RunTurnback"), 5}, {TEXT("Grounded->TurnInPlace"), 6},
 		{TEXT("SprintImpulse->JumpStart"), 1}, {TEXT("SprintImpulse->Airborne"), 2}, {TEXT("SprintImpulse->Grounded"), 3},
@@ -2150,12 +2672,20 @@ bool URoverAnimationEditorLibrary::ValidateRoverAnimBlueprint(
 		const FString Edge = PreviousState->GetStateName() + TEXT("->") + NextState->GetStateName();
 		FoundTransitions.Add(Edge);
 		const int32* ExpectedPriority = ExpectedTransitionPriorities.Find(Edge);
-		const ETransitionLogicType::Type ExpectedLogicType = Edge == TEXT("MoveStop->Grounded")
+		const ETransitionLogicType::Type ExpectedLogicType =
+			Edge == TEXT("MoveStop->Grounded")
 			? ETransitionLogicType::TLT_Inertialization
 			: ETransitionLogicType::TLT_StandardBlend;
+		const float ExpectedCrossfadeDuration = Edge == TEXT("RunTurnback->Grounded")
+			? ResolveRunTurnbackBlendOutDuration()
+			: 0.12f;
+		const EAlphaBlendOption ExpectedBlendMode = Edge == TEXT("RunTurnback->Grounded")
+			? EAlphaBlendOption::Cubic
+			: EAlphaBlendOption::Linear;
 		if (!ExpectedPriority ||
 			Transition->PriorityOrder != *ExpectedPriority ||
-			!FMath::IsNearlyEqual(Transition->CrossfadeDuration, 0.12f) ||
+			!FMath::IsNearlyEqual(Transition->CrossfadeDuration, ExpectedCrossfadeDuration) ||
+			Transition->BlendMode != ExpectedBlendMode ||
 			Transition->LogicType != ExpectedLogicType ||
 			Transition->bAllowInertializationForSelfTransitions)
 		{
@@ -2196,7 +2726,7 @@ bool URoverAnimationEditorLibrary::ValidateRoverAnimBlueprint(
 	}
 
 	ValidationReport = FString::Printf(
-		TEXT("parent=URoverAnimInstance skeleton=%s machine=RoverLocomotion combat_slot=DefaultSlot_full_body recovery_cancel=montage_blendout states=%d transitions=%d move_stop_exit=inertialized resources=verified compile=clean"),
+		TEXT("parent=URoverAnimInstance skeleton=%s machine=RoverLocomotion combat_slot=DefaultSlot_full_body recovery_cancel=montage_blendout states=%d transitions=%d run_turnback_exit=configured_full_body_cubic_crossfade move_stop_exit=inertialized resources=verified compile=clean"),
 		*PreviewMesh->GetSkeleton()->GetName(),
 		StateNames.Num(),
 		FoundTransitions.Num());

@@ -112,6 +112,14 @@ struct ROVERREPLICA_API FRoverMovementSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.05"))
 	float RunTurnbackInertiaDuration = 0.16f;
 
+	// Normalized Run_Turnback progress that releases movement and blends back to locomotion.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float RunTurnbackResumeNormalizedTime = 0.70f;
+
+	// Full-body crossfade from Run_Turnback into the resumed locomotion pose.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.05", ClampMax = "0.5", ForceUnits = "s"))
+	float RunTurnbackBlendOutDuration = 0.22f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.0"))
 	float RunTurnbackRecoveryInitialSpeed = 180.0f;
 
@@ -154,9 +162,10 @@ struct ROVERREPLICA_API FRoverMovementSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
 	bool bUseAnalogWalk = true;
 
-	// [PLACEHOLDER] Prevents combat lunges from pushing simulated movement bases such as rope bridges.
+	// [PLACEHOLDER] Retains a readable combat lunge on simulated movement bases without restoring
+	// CharacterMovement's native physics push force.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float AttackAdvanceScaleOnSimulatedBase = 0.0f;
+	float AttackAdvanceScaleOnSimulatedBase = 0.65f;
 
 	// [PLACEHOLDER] Prevents CharacterMovement's native blocking-hit push force from
 	// injecting a combat spike into a simulated movement base. Standing load is unchanged.

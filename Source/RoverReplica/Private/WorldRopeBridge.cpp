@@ -2,6 +2,7 @@
 
 #include "RoverRootMotionSourceNames.h"
 #include "Components/BoxComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/CollisionProfile.h"
@@ -50,11 +51,13 @@ TArray<FVector> CalculateAnchorLocations(
 	return Locations;
 }
 
-bool TryGetConstraintFrameSeparation(
+bool TryGetConstraintWorldFrames(
 	UPhysicsConstraintComponent* Constraint,
-	float& OutSeparation)
+	FTransform& OutFrame1Transform,
+	FTransform& OutFrame2Transform)
 {
-	OutSeparation = TNumericLimits<float>::Max();
+	OutFrame1Transform = FTransform::Identity;
+	OutFrame2Transform = FTransform::Identity;
 	if (!IsValid(Constraint))
 	{
 		return false;
@@ -86,13 +89,44 @@ bool TryGetConstraintFrameSeparation(
 		return LocalFrame * BodyTransform;
 	};
 
-	const FVector Frame1Location = GetWorldFrame(EConstraintFrame::Frame1).GetLocation();
-	const FVector Frame2Location = GetWorldFrame(EConstraintFrame::Frame2).GetLocation();
+	OutFrame1Transform = GetWorldFrame(EConstraintFrame::Frame1);
+	OutFrame2Transform = GetWorldFrame(EConstraintFrame::Frame2);
+	const FVector Frame1Location = OutFrame1Transform.GetLocation();
+	const FVector Frame2Location = OutFrame2Transform.GetLocation();
 	if (Frame1Location.ContainsNaN() || Frame2Location.ContainsNaN())
 	{
 		return false;
 	}
-	OutSeparation = FVector::Distance(Frame1Location, Frame2Location);
+	return true;
+}
+
+bool TryGetConstraintFrameOffset(
+	UPhysicsConstraintComponent* Constraint,
+	FVector& OutOffset)
+{
+	OutOffset = FVector(TNumericLimits<float>::Max());
+	FTransform Frame1Transform;
+	FTransform Frame2Transform;
+	if (!TryGetConstraintWorldFrames(Constraint, Frame1Transform, Frame2Transform))
+	{
+		return false;
+	}
+	OutOffset = Frame1Transform.InverseTransformVectorNoScale(
+		Frame2Transform.GetLocation() - Frame1Transform.GetLocation());
+	return !OutOffset.ContainsNaN();
+}
+
+bool TryGetConstraintFrameSeparation(
+	UPhysicsConstraintComponent* Constraint,
+	float& OutSeparation)
+{
+	FVector Offset;
+	if (!TryGetConstraintFrameOffset(Constraint, Offset))
+	{
+		OutSeparation = TNumericLimits<float>::Max();
+		return false;
+	}
+	OutSeparation = Offset.Size();
 	return FMath::IsFinite(OutSeparation);
 }
 }
@@ -194,6 +228,19 @@ void AWorldRopeBridge::Tick(const float DeltaSeconds)
 	const FWorldRopeBridgeSettings Settings = GetResolvedBridgeSettings();
 	TArray<AActor*> OverlappingActors;
 	CharacterTrackingVolume->GetOverlappingActors(OverlappingActors, ACharacter::StaticClass());
+	for (const TPair<TWeakObjectPtr<ACharacter>, FCharacterContactState>& Pair :
+		CharacterContactStates)
+	{
+		ACharacter* TrackedCharacter = Pair.Key.Get();
+		if (IsValid(TrackedCharacter) &&
+			IsCharacterSupportedByBridge(TrackedCharacter) &&
+			!OverlappingActors.Contains(TrackedCharacter))
+		{
+			// A wide deck can carry the capsule just outside the fixed query box.
+			// Keep real movement-base support authoritative until the character steps off.
+			OverlappingActors.Add(TrackedCharacter);
+		}
+	}
 	TSet<TWeakObjectPtr<ACharacter>> ActiveCharacters;
 	ActiveCharacters.Reserve(OverlappingActors.Num());
 	bool bAnyBridgeInteraction = false;
@@ -209,17 +256,37 @@ void AWorldRopeBridge::Tick(const float DeltaSeconds)
 
 		FCharacterContactState& State = CharacterContactStates.FindOrAdd(Character);
 		const FVector CurrentVelocity = Character->GetVelocity();
-		UStaticMeshComponent* CurrentPlank = FindBridgePlank(Character->GetMovementBaseObject());
+		UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
+		UStaticMeshComponent* CurrentPlank = FindBridgePlank(
+			Character->GetMovementBaseObject());
+		if (!IsCharacterGroundedOnPlank(Character, CurrentPlank))
+		{
+			CurrentPlank = nullptr;
+		}
 		UStaticMeshComponent* PreviousPlank = State.PreviousPlank.Get();
 		State.bHasTouchedBridge = State.bHasTouchedBridge || CurrentPlank != nullptr;
 		bAnyBridgeInteraction = bAnyBridgeInteraction || State.bHasTouchedBridge;
-		UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
 		const float CharacterMass = Movement ? FMath::Max(Movement->Mass, 0.0f) : 0.0f;
 		const bool bIsFalling = Movement && Movement->IsFalling();
-		const bool bSuppressMovementImpulse =
-			Settings.bSuppressRootMotionMovementImpulses && Movement &&
+		const bool bCombatAttackAdvanceActive = Movement &&
 			Movement->GetRootMotionSource(
 				RoverRootMotionSourceNames::CombatAttackAdvance()).IsValid();
+		if (Settings.bSuppressRootMotionMovementImpulses && bCombatAttackAdvanceActive)
+		{
+			State.MovementImpulseSuppressionRemaining =
+				Settings.RootMotionMovementImpulseSuppressionGraceTime;
+		}
+		else
+		{
+			State.MovementImpulseSuppressionRemaining = FMath::Max(
+				0.0f,
+				State.MovementImpulseSuppressionRemaining -
+					FMath::Max(0.0f, DeltaSeconds));
+		}
+		const bool bSuppressMovementImpulse =
+			Settings.bSuppressRootMotionMovementImpulses &&
+			(bCombatAttackAdvanceActive ||
+				State.MovementImpulseSuppressionRemaining > 0.0f);
 		if (!CurrentPlank || bIsFalling)
 		{
 			State.PeakAirborneDownwardSpeed = FMath::Max(
@@ -391,6 +458,9 @@ FWorldRopeBridgeSettings AWorldRopeBridge::GetResolvedBridgeSettings() const
 		0.0f,
 		Settings.MovementImpulseAtReferenceSpeed);
 	Settings.MovementImpulseInterval = FMath::Max(0.05f, Settings.MovementImpulseInterval);
+	Settings.RootMotionMovementImpulseSuppressionGraceTime = FMath::Max(
+		0.0f,
+		Settings.RootMotionMovementImpulseSuppressionGraceTime);
 	Settings.MinimumJumpTakeoffSpeed = FMath::Max(0.0f, Settings.MinimumJumpTakeoffSpeed);
 	Settings.JumpTakeoffImpulseScale = FMath::Clamp(
 		Settings.JumpTakeoffImpulseScale,
@@ -976,11 +1046,13 @@ UPhysicsConstraintComponent* AWorldRopeBridge::CreateConstraint(
 		FVector::ForwardVector).Rotator();
 	Constraint->SetRelativeLocationAndRotation(RelativeLocation, ConstraintRotation);
 	Constraint->RegisterComponent();
-	Constraint->SetLinearXLimit(LCM_Locked, 0.0f);
-	Constraint->SetLinearYLimit(LCM_Locked, 0.0f);
-	Constraint->SetLinearZLimit(
+	Constraint->ConstraintInstance.SetLinearLimits(
+		LCM_Locked,
+		LCM_Locked,
 		bSecondaryConstraint ? LCM_Free : LCM_Locked,
 		0.0f);
+	Constraint->SetLinearPositionDrive(false, false, false);
+	Constraint->SetLinearVelocityDrive(false, false, false);
 	if (bSecondaryConstraint)
 	{
 		Constraint->SetAngularSwing1Limit(ACM_Free, 0.0f);
@@ -1334,6 +1406,26 @@ float AWorldRopeBridge::GetEndpointPositionError(const int32 AnchorIndex) const
 	return TNumericLimits<float>::Max();
 }
 
+FVector AWorldRopeBridge::GetEndpointConstraintFrameOffset(const int32 AnchorIndex) const
+{
+	if (AnchorIndex < 0 || AnchorIndex >= BridgeAnchorCount)
+	{
+		return FVector(TNumericLimits<float>::Max());
+	}
+	for (UPhysicsConstraintComponent* Constraint : GeneratedConstraints)
+	{
+		if (IsValid(Constraint) &&
+			Constraint->ComponentTags.Contains(AnchorConstraintTags[AnchorIndex]))
+		{
+			FVector Offset;
+			return TryGetConstraintFrameOffset(Constraint, Offset)
+				? Offset
+				: FVector(TNumericLimits<float>::Max());
+		}
+	}
+	return FVector(TNumericLimits<float>::Max());
+}
+
 float AWorldRopeBridge::GetMaximumAdjacentPlankDistanceError() const
 {
 	if (GeneratedPlanks.Num() < 2 ||
@@ -1355,6 +1447,26 @@ float AWorldRopeBridge::GetMaximumAdjacentPlankDistanceError() const
 	return MaximumError;
 }
 
+float AWorldRopeBridge::GetMaximumPrimaryInternalConstraintFrameSeparation() const
+{
+	float MaximumSeparation = 0.0f;
+	for (UPhysicsConstraintComponent* Constraint : GeneratedConstraints)
+	{
+		if (!IsValid(Constraint) ||
+			!Constraint->ComponentTags.Contains(InternalNegativeYConstraintTag))
+		{
+			continue;
+		}
+
+		float Separation = 0.0f;
+		if (TryGetConstraintFrameSeparation(Constraint, Separation))
+		{
+			MaximumSeparation = FMath::Max(MaximumSeparation, Separation);
+		}
+	}
+	return MaximumSeparation;
+}
+
 bool AWorldRopeBridge::ApplyImpulseToCenterPlank(const FVector& WorldImpulse)
 {
 	UStaticMeshComponent* CenterPlank = GetPlankComponent(GeneratedPlanks.Num() / 2);
@@ -1374,9 +1486,37 @@ UStaticMeshComponent* AWorldRopeBridge::FindBridgePlank(UObject* Component) cons
 	return Plank && GeneratedPlanks.Contains(Plank) ? Plank : nullptr;
 }
 
+bool AWorldRopeBridge::IsCharacterGroundedOnPlank(
+	const ACharacter* Character,
+	const UStaticMeshComponent* Plank) const
+{
+	const UCharacterMovementComponent* Movement =
+		Character ? Character->GetCharacterMovement() : nullptr;
+	if (!Movement || !Movement->IsMovingOnGround() || !IsValid(Plank))
+	{
+		return false;
+	}
+
+	const UCapsuleComponent* Capsule = Character->GetCapsuleComponent();
+	if (!Capsule)
+	{
+		return false;
+	}
+
+	FVector ClosestPoint = FVector::ZeroVector;
+	const float DistanceToPlank = Plank->GetClosestPointOnCollision(
+		Character->GetActorLocation(),
+		ClosestPoint);
+	const float MaximumSupportDistance =
+		Capsule->GetScaledCapsuleHalfHeight() + Capsule->GetScaledCapsuleRadius();
+	return DistanceToPlank >= 0.0f && DistanceToPlank <= MaximumSupportDistance;
+}
+
 bool AWorldRopeBridge::IsCharacterSupportedByBridge(const ACharacter* Character) const
 {
-	return Character && FindBridgePlank(Character->GetMovementBaseObject()) != nullptr;
+	const UStaticMeshComponent* Plank =
+		Character ? FindBridgePlank(Character->GetMovementBaseObject()) : nullptr;
+	return IsCharacterGroundedOnPlank(Character, Plank);
 }
 
 void AWorldRopeBridge::ApplyCharacterImpulse(

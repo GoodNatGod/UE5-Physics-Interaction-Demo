@@ -14,6 +14,18 @@ enum class ERoverCombatPhase : uint8
 };
 
 UENUM(BlueprintType)
+enum class ERoverAttackType : uint8
+{
+	None,
+	LightAttack,
+	HeavyAttack,
+	HeavyResonance,
+	HeavyEcho,
+	DodgeCounter,
+	AirAttack,
+};
+
+UENUM(BlueprintType)
 enum class ERoverHitReactionType : uint8
 {
 	None,
@@ -26,6 +38,16 @@ enum class ERoverWeaponHand : uint8
 {
 	Right,
 	Left,
+};
+
+UENUM(BlueprintType)
+enum class ERoverThirdAttackThrowPhase : uint8
+{
+	Inactive,
+	Waiting,
+	Outbound,
+	Spinning,
+	Returning,
 };
 
 USTRUCT(BlueprintType)

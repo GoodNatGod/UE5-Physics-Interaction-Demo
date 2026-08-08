@@ -113,6 +113,10 @@ struct ROVERREPLICA_API FWorldRopeBridgeSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Movement")
 	bool bSuppressRootMotionMovementImpulses = true;
 
+	// [PLACEHOLDER] Keeps residual attack-advance velocity from becoming a footstep after crossing a plank seam.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Movement", meta = (ClampMin = "0.0", Units = "s"))
+	float RootMotionMovementImpulseSuppressionGraceTime = 0.60f;
+
 	// [PLACEHOLDER] Ignores tiny vertical base changes that are not intentional jumps.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Jump", meta = (ClampMin = "0.0", Units = "cm/s"))
 	float MinimumJumpTakeoffSpeed = 120.0f;

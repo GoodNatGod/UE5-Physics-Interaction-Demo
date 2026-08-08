@@ -59,6 +59,29 @@ public:
 		USkeletalMesh* WeaponMesh,
 		FString& ValidationReport);
 
+	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Combat")
+	static bool CreateRoverLightAttackAsset(
+		UAnimSequence* AttackSequence,
+		int32 ComboIndex,
+		FString& ValidationReport);
+
+	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Combat")
+	static bool CreateRoverHeavyAttackAsset(
+		UAnimSequence* AttackSequence,
+		FString& ValidationReport);
+
+	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Combat")
+	static bool CreateRoverHeavyResonanceAsset(
+		UAnimSequence* AttackSequence,
+		FString& ValidationReport);
+
+	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Combat")
+	static bool CreateRoverAirAttackAsset(
+		UAnimSequence* StartSequence,
+		UAnimSequence* LoopSequence,
+		UAnimSequence* EndSequence,
+		FString& ValidationReport);
+
 	UFUNCTION(BlueprintPure, Category = "Rover|Editor|Combat")
 	static bool ValidateRoverAttackMontage(
 		const UAnimSequence* AttackSequence,

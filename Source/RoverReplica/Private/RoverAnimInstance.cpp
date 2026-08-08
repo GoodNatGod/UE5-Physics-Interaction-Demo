@@ -26,6 +26,17 @@ float ResolveMoveStopDuration(const ERoverGait Gait, const bool bUseLeftVariant)
 	}
 	return 0.75f;
 }
+
+float ResolveRunTurnbackDuration()
+{
+	const FString ObjectPath = TEXT(
+		"/Game/Rover/Animations/P0/Run_Turnback.Run_Turnback");
+	if (const UAnimSequence* Sequence = LoadObject<UAnimSequence>(nullptr, *ObjectPath))
+	{
+		return Sequence->GetPlayLength();
+	}
+	return 1.67f;
+}
 }
 
 void URoverAnimInstance::NativeInitializeAnimation()
@@ -108,14 +119,64 @@ void URoverAnimInstance::NativeUpdateAnimation(const float DeltaSeconds)
 	bIsLanding = bLandingLight || bLandingHeavy || bLandingRoll;
 	bGroundedWithoutLanding = !bIsFalling && !bIsLanding;
 	const int32 GroundTurnRequestId = LocomotionComponent->GetGroundTurnRequestId();
+	const ERoverGroundTurnType GroundTurnType = LocomotionComponent->GetGroundTurnType();
 	if (GroundTurnRequestId != ObservedGroundTurnRequestId)
 	{
 		ObservedGroundTurnRequestId = GroundTurnRequestId;
 		bGroundTurnRight = LocomotionComponent->DoesGroundTurnRight();
+		RunTurnbackElapsedTime = 0.0f;
+		RunTurnbackRemainingTime = GroundTurnType == ERoverGroundTurnType::RunTurnback
+			? ResolveRunTurnbackDuration()
+			: 0.0f;
 	}
-	const ERoverGroundTurnType GroundTurnType = LocomotionComponent->GetGroundTurnType();
 	bTurnInPlaceRequested = LocomotionComponent->IsGroundTurnPending() && GroundTurnType == ERoverGroundTurnType::TurnInPlace;
 	bRunTurnbackRequested = LocomotionComponent->IsGroundTurnPending() && GroundTurnType == ERoverGroundTurnType::RunTurnback;
+	const bool bRunTurnbackActive =
+		LocomotionComponent->IsGroundTurnActive() &&
+		GroundTurnType == ERoverGroundTurnType::RunTurnback;
+	if (bRunTurnbackActive)
+	{
+		RunTurnbackRemainingTime = FMath::Max(
+			0.0f,
+			RunTurnbackRemainingTime - DeltaSeconds);
+		RunTurnbackElapsedTime += DeltaSeconds;
+	}
+	else if (!bRunTurnbackRequested)
+	{
+		RunTurnbackRemainingTime = 0.0f;
+		RunTurnbackElapsedTime = 0.0f;
+	}
+	const float RunTurnbackDuration =
+		RunTurnbackRemainingTime + RunTurnbackElapsedTime;
+	RunTurnbackNormalizedTime = RunTurnbackDuration > UE_KINDA_SMALL_NUMBER
+		? FMath::Clamp(RunTurnbackElapsedTime / RunTurnbackDuration, 0.0f, 1.0f)
+		: 0.0f;
+	const float RunTurnbackResumeNormalizedTime = FMath::Clamp(
+		Settings.RunTurnbackResumeNormalizedTime,
+		0.1f,
+		1.0f);
+	const bool bRunTurnbackResumeRequested =
+		LocomotionComponent->ShouldGroundTurnResumeMovement();
+	const bool bRunTurnbackResumeWindowReached =
+		bRunTurnbackActive && bRunTurnbackResumeRequested &&
+		RunTurnbackNormalizedTime >= RunTurnbackResumeNormalizedTime;
+	if (bRunTurnbackResumeWindowReached)
+	{
+		// The capsule is intentionally stationary before this frame, which makes
+		// the normal velocity-based locomotion flags select Idle. Seed the target
+		// state with the entry gait so the full-body transition blends directly
+		// from Run_Turnback into movement instead of flashing through Idle.
+		const ERoverGait ResumeGait = LocomotionComponent->GetGroundTurnEntryGait();
+		bShouldMove = true;
+		bIsWalking = ResumeGait == ERoverGait::Walk;
+		bIsRunning = ResumeGait == ERoverGait::Run;
+		bIsSprinting = ResumeGait == ERoverGait::Sprint;
+		LocomotionComponent->AcknowledgeRunTurnbackResumeWindow(
+			ObservedGroundTurnRequestId);
+	}
+	bRunTurnbackShouldExit = !bRunTurnbackRequested &&
+		(!bRunTurnbackActive || bRunTurnbackResumeWindowReached ||
+			RunTurnbackRemainingTime <= 0.12f);
 	const int32 MoveStopRequestId = LocomotionComponent->GetMoveStopRequestId();
 	if (MoveStopRequestId != ObservedMoveStopRequestId)
 	{
@@ -151,9 +212,12 @@ void URoverAnimInstance::NativeUpdateAnimation(const float DeltaSeconds)
 		(!bMoveStopActive || bResumeWindowReached || MoveStopRemainingTime <= 0.12f);
 
 	CombatPhase = CombatComponent->GetCombatPhase();
+	AttackType = CombatComponent->GetCurrentAttackType();
 	HitReactionType = CombatComponent->GetHitReactionType();
 	const bool bWasAttacking = bIsAttacking;
 	bIsAttacking = CombatComponent->IsAttacking();
+	bIsHeavyAttack = AttackType == ERoverAttackType::HeavyAttack;
+	bIsResonance = AttackType == ERoverAttackType::HeavyResonance;
 	bIsInHitReaction = CombatComponent->IsInHitReaction();
 
 	// Preserve the final attack pose by matching the idle stance to the forward foot.
@@ -325,6 +389,16 @@ void URoverAnimInstance::PlayAttackRequestImmediately(const int32 RequestId)
 	PlayPendingAttack(RequestId);
 }
 
+void URoverAnimInstance::TransitionAirAttackToLanding(const int32 RequestId)
+{
+	if (RequestId <= 0 || RequestId != ObservedAttackRequestId || !ActiveAttackMontage ||
+		!Montage_IsPlaying(ActiveAttackMontage))
+	{
+		return;
+	}
+	Montage_JumpToSection(TEXT("End"), ActiveAttackMontage);
+}
+
 void URoverAnimInstance::StopAttackRequest(const int32 RequestId, const float BlendOutTime)
 {
 	if (RequestId <= 0 || !ActiveAttackMontage)
@@ -353,6 +427,22 @@ void URoverAnimInstance::HandleComboWindowStateEnd()
 	if (RoverCharacter)
 	{
 		RoverCharacter->HandleComboWindowEndNotify(ObservedAttackRequestId);
+	}
+}
+
+void URoverAnimInstance::HandleResonanceWindowStateBegin()
+{
+	if (RoverCharacter)
+	{
+		RoverCharacter->HandleResonanceWindowBeginNotify(ObservedAttackRequestId);
+	}
+}
+
+void URoverAnimInstance::HandleResonanceWindowStateEnd()
+{
+	if (RoverCharacter)
+	{
+		RoverCharacter->HandleResonanceWindowEndNotify(ObservedAttackRequestId);
 	}
 }
 
@@ -402,6 +492,11 @@ void URoverAnimInstance::OnHitReactionMontageEnded(UAnimMontage* Montage, const 
 void URoverAnimInstance::AnimNotify_RoverAttackStarted()
 {
 	if (RoverCharacter) RoverCharacter->HandleAttackStartedNotify(ObservedAttackRequestId);
+}
+
+void URoverAnimInstance::AnimNotify_RoverAirAttackApex()
+{
+	if (RoverCharacter) RoverCharacter->HandleAirAttackApexNotify(ObservedAttackRequestId);
 }
 
 void URoverAnimInstance::AnimNotify_RoverAttackActiveBegin()
