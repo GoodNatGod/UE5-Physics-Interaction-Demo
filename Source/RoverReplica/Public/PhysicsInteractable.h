@@ -21,4 +21,14 @@ public:
 
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "World Interaction")
 	void HandleWorldInteraction(const FWorldInteractionRequest& Request);
+
+	// Return true when the receiver applies its own rigid-body impulse for this request.
+	// The subsystem will then skip its generic impulse for components owned by the receiver.
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "World Interaction")
+	bool HandlesWorldInteractionPhysicsImpulse(const FWorldInteractionRequest& Request) const;
+	virtual bool HandlesWorldInteractionPhysicsImpulse_Implementation(
+		const FWorldInteractionRequest& Request) const
+	{
+		return false;
+	}
 };

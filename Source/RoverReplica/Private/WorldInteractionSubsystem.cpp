@@ -573,6 +573,7 @@ FWorldInteractionResult UWorldInteractionSubsystem::SubmitWorldInteraction(
 	}
 
 	const FWorldInteractionSettings& Settings = GetSettings();
+	TSet<TWeakObjectPtr<AActor>> CustomPhysicsImpulseReceiverActors;
 	for (const TWeakObjectPtr<AActor>& ReceiverActor : ReceiverActors)
 	{
 		AActor* Actor = ReceiverActor.Get();
@@ -596,6 +597,12 @@ FWorldInteractionResult UWorldInteractionSubsystem::SubmitWorldInteraction(
 			continue;
 		}
 		IPhysicsInteractable::Execute_HandleWorldInteraction(Actor, ReceiverRequest);
+		if (IPhysicsInteractable::Execute_HandlesWorldInteractionPhysicsImpulse(
+			Actor,
+			ReceiverRequest))
+		{
+			CustomPhysicsImpulseReceiverActors.Add(Actor);
+		}
 		++Result.ReceiverCount;
 	}
 
@@ -603,6 +610,10 @@ FWorldInteractionResult UWorldInteractionSubsystem::SubmitWorldInteraction(
 	{
 		if (UPrimitiveComponent* Component = PhysicsComponent.Get())
 		{
+			if (CustomPhysicsImpulseReceiverActors.Contains(Component->GetOwner()))
+			{
+				continue;
+			}
 			// An interactable may replace or disable its intact body while handling the request.
 			if (!Component->IsSimulatingPhysics())
 			{

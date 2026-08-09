@@ -41,6 +41,9 @@ ATTACK_SETTLED_ANGULAR_SPEED = 35.0
 ATTACK_REPEAT_MIN_WAIT_SECONDS = 1.0
 ATTACK_REPEAT_QUIET_SECONDS = 0.20
 ATTACK_RESTORE_GRACE_SECONDS = 1.0
+ATTACK_DAMPING_TIME_TOLERANCE_SECONDS = 0.10
+MAX_ATTACK_TO_LANDING_LINEAR_RATIO = 0.75
+MAX_ATTACK_ANGULAR_SPEED = 280.0
 ATTACK_SUPPORT_GRACE_SECONDS = 1.50
 MIN_ATTACK_RELATIVE_ADVANCE_CM = 15.0
 FIRST_LOAD_HITCH_MIN_DELTA_SECONDS = 0.050
@@ -131,6 +134,10 @@ state = {
     "attack_world_interaction_count": 0,
     "attack_advance_seen": False,
     "attack_anim_root_motion_seen": False,
+    "attack_response_damping_seen": False,
+    "attack_response_damping_restored": False,
+    "attack_response_damping_restore_seconds": 0.0,
+    "attack_advance_inactive_since": None,
     "attack_reference_plank": None,
     "attack_start_relative_location": None,
     "attack_max_relative_displacement": 0.0,
@@ -169,6 +176,13 @@ state = {
     "plank_mass_kg": 0.0,
     "character_mass_kg": 0.0,
     "standing_force_scale": 0.0,
+    "attack_advance_duration_scale": 0.0,
+    "attack_advance_ease": 0.0,
+    "direct_hit_impulse_scale": 0.0,
+    "maximum_direct_hit_impulse": 0.0,
+    "attack_response_linear_damping_multiplier": 0.0,
+    "attack_response_angular_damping_multiplier": 0.0,
+    "attack_response_damping_grace_time": 0.0,
 }
 tick_handle = None
 
@@ -866,10 +880,39 @@ def begin_validation(world):
             "attack_advance_scale_on_simulated_base"
         )
     )
+    attack_advance_duration_scale = float(
+        movement_settings.get_editor_property(
+            "attack_advance_duration_scale_on_simulated_base"
+        )
+    )
+    attack_advance_ease = float(
+        movement_settings.get_editor_property(
+            "attack_advance_ease_on_simulated_base"
+        )
+    )
     attack_standing_force_scale = float(
         movement_settings.get_editor_property(
             "attack_standing_downward_force_scale_on_simulated_base"
         )
+    )
+    direct_hit_impulse_scale = float(
+        settings.get_editor_property("direct_hit_impulse_scale")
+    )
+    maximum_direct_hit_impulse = float(
+        settings.get_editor_property("maximum_direct_hit_impulse")
+    )
+    attack_response_linear_damping_multiplier = float(
+        settings.get_editor_property(
+            "attack_response_linear_damping_multiplier"
+        )
+    )
+    attack_response_angular_damping_multiplier = float(
+        settings.get_editor_property(
+            "attack_response_angular_damping_multiplier"
+        )
+    )
+    attack_response_damping_grace_time = float(
+        settings.get_editor_property("attack_response_damping_grace_time")
     )
     if not nearly_equal(actual_character_mass, expected_character_mass, 0.01):
         fail(
@@ -892,9 +935,88 @@ def begin_validation(world):
     if attack_advance_scale <= 0.0 or attack_advance_scale > 1.0:
         fail(f"invalid bridge attack advance scale={attack_advance_scale:.3f}")
         return
-    if attack_standing_force_scale < 0.0 or attack_standing_force_scale > 1.0:
-        fail(f"invalid attack standing load scale={attack_standing_force_scale:.3f}")
+    if (
+        not math.isfinite(attack_advance_duration_scale)
+        or attack_advance_duration_scale <= 0.0
+    ):
+        fail(
+            "invalid bridge attack advance duration scale="
+            f"{attack_advance_duration_scale:.3f}; expected >0.0"
+        )
         return
+    if (
+        not math.isfinite(attack_advance_ease)
+        or attack_advance_ease < 0.0
+        or attack_advance_ease > 1.0
+    ):
+        fail(
+            f"invalid bridge attack advance ease={attack_advance_ease:.3f}; "
+            "expected 0.0-1.0"
+        )
+        return
+    if not nearly_equal(attack_standing_force_scale, 1.0, 0.01):
+        fail(
+            f"attack standing load scale={attack_standing_force_scale:.3f}; "
+            "the bridge combat filter must retain full character weight"
+        )
+        return
+    if (
+        not math.isfinite(direct_hit_impulse_scale)
+        or direct_hit_impulse_scale < 0.0
+        or direct_hit_impulse_scale > 1.0
+    ):
+        fail(
+            f"invalid bridge direct hit impulse scale={direct_hit_impulse_scale:.3f}; "
+            "expected 0.0-1.0"
+        )
+        return
+    if (
+        not math.isfinite(maximum_direct_hit_impulse)
+        or maximum_direct_hit_impulse < 0.0
+    ):
+        fail(
+            "invalid bridge maximum direct hit impulse="
+            f"{maximum_direct_hit_impulse:.3f}; expected >=0.0"
+        )
+        return
+    if (
+        not math.isfinite(attack_response_linear_damping_multiplier)
+        or attack_response_linear_damping_multiplier < 1.0
+    ):
+        fail(
+            "invalid bridge attack linear damping multiplier="
+            f"{attack_response_linear_damping_multiplier:.3f}; expected >=1.0"
+        )
+        return
+    if (
+        not math.isfinite(attack_response_angular_damping_multiplier)
+        or attack_response_angular_damping_multiplier < 1.0
+    ):
+        fail(
+            "invalid bridge attack angular damping multiplier="
+            f"{attack_response_angular_damping_multiplier:.3f}; expected >=1.0"
+        )
+        return
+    if (
+        not math.isfinite(attack_response_damping_grace_time)
+        or attack_response_damping_grace_time < 0.0
+    ):
+        fail(
+            "invalid bridge attack damping grace time="
+            f"{attack_response_damping_grace_time:.3f}s; expected >=0.0"
+        )
+        return
+
+    unreal.log(
+        "PHYSICS_WORLD_ROPE_BRIDGE_ATTACK_ISOLATION_CONFIG "
+        f"advance_duration_scale={attack_advance_duration_scale:.3f} "
+        f"advance_ease={attack_advance_ease:.3f} "
+        f"direct_hit_impulse_scale={direct_hit_impulse_scale:.3f} "
+        f"maximum_direct_hit_impulse={maximum_direct_hit_impulse:.3f} "
+        f"response_damping={attack_response_linear_damping_multiplier:.3f}/"
+        f"{attack_response_angular_damping_multiplier:.3f}/"
+        f"{attack_response_damping_grace_time:.3f}s"
+    )
 
     movement_impulse = float(
         settings.get_editor_property("movement_impulse_at_reference_speed")
@@ -972,7 +1094,20 @@ def begin_validation(world):
             "original_push_force": original_push_force,
             "attack_physics_push_scale": attack_physics_push_scale,
             "attack_advance_scale": attack_advance_scale,
+            "attack_advance_duration_scale": attack_advance_duration_scale,
+            "attack_advance_ease": attack_advance_ease,
             "attack_standing_force_scale": attack_standing_force_scale,
+            "direct_hit_impulse_scale": direct_hit_impulse_scale,
+            "maximum_direct_hit_impulse": maximum_direct_hit_impulse,
+            "attack_response_linear_damping_multiplier": (
+                attack_response_linear_damping_multiplier
+            ),
+            "attack_response_angular_damping_multiplier": (
+                attack_response_angular_damping_multiplier
+            ),
+            "attack_response_damping_grace_time": (
+                attack_response_damping_grace_time
+            ),
         }
     )
     set_phase("settling")
@@ -1205,6 +1340,10 @@ def reset_attack_sample_metrics():
             "attack_world_interaction_count": 0,
             "attack_advance_seen": False,
             "attack_anim_root_motion_seen": False,
+            "attack_response_damping_seen": False,
+            "attack_response_damping_restored": False,
+            "attack_response_damping_restore_seconds": 0.0,
+            "attack_advance_inactive_since": None,
             "attack_reference_plank": None,
             "attack_start_relative_location": None,
             "attack_max_relative_displacement": 0.0,
@@ -1248,6 +1387,13 @@ def complete_attack_sample():
         "max_delta_seconds": state["attack_max_delta_seconds"],
         "request_call_seconds": state["attack_request_call_seconds"],
         "frame_count": frame_count,
+        "response_damping_seen": state["attack_response_damping_seen"],
+        "response_damping_restored": state[
+            "attack_response_damping_restored"
+        ],
+        "response_damping_restore_seconds": state[
+            "attack_response_damping_restore_seconds"
+        ],
     }
     state["attack_samples"].append(sample)
     unreal.log(
@@ -1266,6 +1412,9 @@ def complete_attack_sample():
         f"delta_avg={sample['average_delta_seconds'] * 1000.0:.2f}ms "
         f"delta_max={sample['max_delta_seconds'] * 1000.0:.2f}ms "
         f"request_call={sample['request_call_seconds'] * 1000.0:.2f}ms "
+        f"response_damping={sample['response_damping_seen']}/"
+        f"{sample['response_damping_restored']}/"
+        f"{sample['response_damping_restore_seconds']:.2f}s "
         f"frames={sample['frame_count']}"
     )
     return sample
@@ -1368,8 +1517,38 @@ def sample_bridge_attack():
     sample = sample_stability()
     if sample is None:
         return
-    if state["locomotion"].is_combat_attack_advance_active():
+    attack_advance_active = bool(
+        state["locomotion"].is_combat_attack_advance_active()
+    )
+    response_damping_active = bool(
+        state["bridge"].is_attack_response_damping_active()
+    )
+    if response_damping_active:
+        state["attack_response_damping_seen"] = True
+    if attack_advance_active:
         state["attack_advance_seen"] = True
+    elif (
+        state["attack_advance_seen"]
+        and state["attack_advance_inactive_since"] is None
+    ):
+        state["attack_advance_inactive_since"] = game_time()
+
+    if state["attack_advance_inactive_since"] is not None:
+        damping_grace_elapsed = (
+            game_time() - state["attack_advance_inactive_since"]
+        )
+        configured_grace = state["attack_response_damping_grace_time"]
+        if (
+            not response_damping_active
+            and damping_grace_elapsed + ATTACK_DAMPING_TIME_TOLERANCE_SECONDS
+            < configured_grace
+        ):
+            fail(
+                "Attack01 response damping ended before its configured grace: "
+                f"elapsed={damping_grace_elapsed:.3f}s "
+                f"grace={configured_grace:.3f}s"
+            )
+            return
     state["attack_anim_root_motion_seen"] = (
         state["attack_anim_root_motion_seen"]
         or state["locomotion"].has_active_animation_root_motion()
@@ -1551,6 +1730,9 @@ def sample_bridge_attack():
     if not state["attack_advance_seen"]:
         fail("Attack01 never created its configured bridge attack advance")
         return
+    if not state["attack_response_damping_seen"]:
+        fail("Attack01 never activated the bridge response damping")
+        return
     if (
         state["attack_max_relative_forward_displacement"]
         < MIN_ATTACK_RELATIVE_ADVANCE_CM
@@ -1562,7 +1744,7 @@ def sample_bridge_attack():
             f"scale={state['attack_advance_scale']:.2f}"
         )
         return
-    if state["locomotion"].is_combat_attack_advance_active():
+    if attack_advance_active:
         fail("bridge Attack01 left an attack advance Root Motion Source active")
         return
     restored_initial_push = float(
@@ -1597,6 +1779,41 @@ def sample_bridge_attack():
             f"push={restored_push:.1f} standing={restored_standing_force:.2f}"
         )
         return
+    damping_grace_started = state["attack_advance_inactive_since"]
+    if damping_grace_started is None:
+        fail("Attack01 response damping grace never started")
+        return
+    damping_restore_seconds = game_time() - damping_grace_started
+    configured_grace = state["attack_response_damping_grace_time"]
+    if response_damping_active:
+        if (
+            damping_restore_seconds
+            > configured_grace + ATTACK_RESTORE_GRACE_SECONDS
+        ):
+            fail(
+                "Attack01 response damping did not restore after its grace: "
+                f"elapsed={damping_restore_seconds:.3f}s "
+                f"grace={configured_grace:.3f}s"
+            )
+            return
+        state["last"] = (
+            "waiting for Attack01 response damping restore "
+            f"{damping_restore_seconds:.2f}/"
+            f"{configured_grace:.2f}s"
+        )
+        return
+    if (
+        damping_restore_seconds + ATTACK_DAMPING_TIME_TOLERANCE_SECONDS
+        < configured_grace
+    ):
+        fail(
+            "Attack01 response damping restored before its grace: "
+            f"elapsed={damping_restore_seconds:.3f}s "
+            f"grace={configured_grace:.3f}s"
+        )
+        return
+    state["attack_response_damping_restored"] = True
+    state["attack_response_damping_restore_seconds"] = damping_restore_seconds
     complete_attack_sample()
     if len(state["attack_samples"]) == 1:
         state["attack_repeat_quiet_since"] = None
@@ -1907,6 +2124,31 @@ def validate_recovery():
         )
         return
     first_attack, repeat_attack = state["attack_samples"]
+    maximum_attack_linear = max(
+        first_attack["peak_linear"], repeat_attack["peak_linear"]
+    )
+    maximum_attack_angular = max(
+        first_attack["peak_angular"], repeat_attack["peak_angular"]
+    )
+    attack_to_landing_ratio = maximum_attack_linear / max(
+        state["landing_peak_linear"], 1.0e-6
+    )
+    if attack_to_landing_ratio > MAX_ATTACK_TO_LANDING_LINEAR_RATIO:
+        fail(
+            "bridge attack response is too close to the landing response: "
+            f"attack={maximum_attack_linear:.1f}cm/s "
+            f"landing={state['landing_peak_linear']:.1f}cm/s "
+            f"ratio={attack_to_landing_ratio:.3f}/"
+            f"{MAX_ATTACK_TO_LANDING_LINEAR_RATIO:.3f}"
+        )
+        return
+    if maximum_attack_angular > MAX_ATTACK_ANGULAR_SPEED:
+        fail(
+            "bridge attack angular response exceeded its combat ceiling: "
+            f"actual={maximum_attack_angular:.1f}deg/s "
+            f"maximum={MAX_ATTACK_ANGULAR_SPEED:.1f}deg/s"
+        )
+        return
     finish(
         True,
         " ".join(
@@ -1922,6 +2164,13 @@ def validate_recovery():
                 f"plank_mass={state['plank_mass_kg']:.2f}kg",
                 f"character_mass={state['character_mass_kg']:.1f}kg",
                 f"standing_force_scale={state['standing_force_scale']:.2f}",
+                f"attack_advance_duration_scale="
+                f"{state['attack_advance_duration_scale']:.3f}",
+                f"attack_advance_ease={state['attack_advance_ease']:.3f}",
+                f"direct_hit_impulse_scale="
+                f"{state['direct_hit_impulse_scale']:.3f}",
+                f"maximum_direct_hit_impulse="
+                f"{state['maximum_direct_hit_impulse']:.3f}",
                 f"standing_peak={state['standing_peak_linear']:.1f}cm/s",
                 f"standing_angular={state['standing_peak_angular']:.1f}deg/s",
                 f"attack_movement_impulse="
@@ -1961,6 +2210,7 @@ def validate_recovery():
                 f"{repeat_attack['peak_phase']}/"
                 f"push={repeat_attack['peak_movement_impulse']:.2f}/"
                 f"delta={repeat_attack['max_delta_seconds'] * 1000.0:.2f}ms",
+                f"attack_to_landing_ratio={attack_to_landing_ratio:.3f}",
                 f"attack_delta_ratio={state['attack_delta_ratio']:.2f}",
                 f"attack_first_load_hitch={state['attack_first_load_hitch']}",
                 f"walk_impulse={state['walk_impulse']:.1f}",

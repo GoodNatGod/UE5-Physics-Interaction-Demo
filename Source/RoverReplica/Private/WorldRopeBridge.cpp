@@ -244,6 +244,7 @@ void AWorldRopeBridge::Tick(const float DeltaSeconds)
 	TSet<TWeakObjectPtr<ACharacter>> ActiveCharacters;
 	ActiveCharacters.Reserve(OverlappingActors.Num());
 	bool bAnyBridgeInteraction = false;
+	bool bAnyAttackAdvanceActive = false;
 
 	for (AActor* Actor : OverlappingActors)
 	{
@@ -271,6 +272,8 @@ void AWorldRopeBridge::Tick(const float DeltaSeconds)
 		const bool bCombatAttackAdvanceActive = Movement &&
 			Movement->GetRootMotionSource(
 				RoverRootMotionSourceNames::CombatAttackAdvance()).IsValid();
+		bAnyAttackAdvanceActive = bAnyAttackAdvanceActive ||
+			(bCombatAttackAdvanceActive && (CurrentPlank || PreviousPlank));
 		if (Settings.bSuppressRootMotionMovementImpulses && bCombatAttackAdvanceActive)
 		{
 			State.MovementImpulseSuppressionRemaining =
@@ -399,6 +402,10 @@ void AWorldRopeBridge::Tick(const float DeltaSeconds)
 			Iterator.RemoveCurrent();
 		}
 	}
+	UpdateAttackResponseDamping(
+		DeltaSeconds,
+		bAnyAttackAdvanceActive,
+		Settings);
 	UpdateUnloadedRecovery(
 		DeltaSeconds,
 		bAnyBridgeInteraction,
@@ -433,6 +440,17 @@ FWorldRopeBridgeSettings AWorldRopeBridge::GetResolvedBridgeSettings() const
 	Settings.PlankMassKg = FMath::Max(0.1f, Settings.PlankMassKg);
 	Settings.LinearDamping = FMath::Max(0.0f, Settings.LinearDamping);
 	Settings.AngularDamping = FMath::Max(0.0f, Settings.AngularDamping);
+	Settings.DirectHitImpulseScale = FMath::Clamp(Settings.DirectHitImpulseScale, 0.0f, 1.0f);
+	Settings.MaximumDirectHitImpulse = FMath::Max(0.0f, Settings.MaximumDirectHitImpulse);
+	Settings.AttackResponseLinearDampingMultiplier = FMath::Max(
+		1.0f,
+		Settings.AttackResponseLinearDampingMultiplier);
+	Settings.AttackResponseAngularDampingMultiplier = FMath::Max(
+		1.0f,
+		Settings.AttackResponseAngularDampingMultiplier);
+	Settings.AttackResponseDampingGraceTime = FMath::Max(
+		0.0f,
+		Settings.AttackResponseDampingGraceTime);
 	Settings.UnloadedRecoveryDelay = FMath::Max(0.0f, Settings.UnloadedRecoveryDelay);
 	Settings.UnloadedRecoveryBlendInTime = FMath::Max(
 		0.0f,
@@ -704,6 +722,8 @@ void AWorldRopeBridge::ClearGeneratedComponents()
 	RestAdjacentPlankDistances.Reset();
 	bUnloadedRecoveryArmed = false;
 	UnloadedRecoveryElapsed = 0.0f;
+	bAttackResponseDampingActive = false;
+	AttackResponseDampingRemaining = 0.0f;
 
 	TInlineComponentArray<UActorComponent*> Components(this);
 	for (UActorComponent* Component : Components)
@@ -784,6 +804,51 @@ void AWorldRopeBridge::RebuildRestState(const FWorldRopeBridgeSettings& Settings
 		RestAdjacentPlankDistances.Add(
 			FVector::Distance(RestPlankLocations[Index], RestPlankLocations[Index + 1]));
 	}
+}
+
+void AWorldRopeBridge::UpdateAttackResponseDamping(
+	const float DeltaSeconds,
+	const bool bAttackAdvanceActive,
+	const FWorldRopeBridgeSettings& Settings)
+{
+	if (bAttackAdvanceActive)
+	{
+		AttackResponseDampingRemaining = Settings.AttackResponseDampingGraceTime;
+	}
+	else
+	{
+		AttackResponseDampingRemaining = FMath::Max(
+			0.0f,
+			AttackResponseDampingRemaining - FMath::Max(0.0f, DeltaSeconds));
+	}
+
+	const bool bShouldApplyCombatDamping =
+		bAttackAdvanceActive || AttackResponseDampingRemaining > 0.0f;
+	if (bShouldApplyCombatDamping != bAttackResponseDampingActive)
+	{
+		SetAttackResponseDampingActive(bShouldApplyCombatDamping, Settings);
+	}
+}
+
+void AWorldRopeBridge::SetAttackResponseDampingActive(
+	const bool bActive,
+	const FWorldRopeBridgeSettings& Settings)
+{
+	const float LinearMultiplier = bActive
+		? Settings.AttackResponseLinearDampingMultiplier
+		: 1.0f;
+	const float AngularMultiplier = bActive
+		? Settings.AttackResponseAngularDampingMultiplier
+		: 1.0f;
+	for (UStaticMeshComponent* Plank : GeneratedPlanks)
+	{
+		if (IsValid(Plank))
+		{
+			Plank->SetLinearDamping(Settings.LinearDamping * LinearMultiplier);
+			Plank->SetAngularDamping(Settings.AngularDamping * AngularMultiplier);
+		}
+	}
+	bAttackResponseDampingActive = bActive;
 }
 
 void AWorldRopeBridge::UpdateUnloadedRecovery(
@@ -1478,6 +1543,48 @@ bool AWorldRopeBridge::ApplyImpulseToCenterPlank(const FVector& WorldImpulse)
 	UnloadedRecoveryElapsed = 0.0f;
 	CenterPlank->AddImpulseAtLocation(WorldImpulse, CenterPlank->GetComponentLocation());
 	return true;
+}
+
+bool AWorldRopeBridge::CanHandleWorldInteraction_Implementation(
+	const FWorldInteractionRequest& Request) const
+{
+	UStaticMeshComponent* Plank = FindBridgePlank(Request.Hit.GetComponent());
+	return Request.Kind == EWorldInteractionKind::DirectHit &&
+		Request.ImpulseStrength > 0.0f &&
+		IsValid(Plank) &&
+		Plank->IsSimulatingPhysics();
+}
+
+void AWorldRopeBridge::HandleWorldInteraction_Implementation(
+	const FWorldInteractionRequest& Request)
+{
+	if (!CanHandleWorldInteraction_Implementation(Request))
+	{
+		return;
+	}
+
+	UStaticMeshComponent* Plank = FindBridgePlank(Request.Hit.GetComponent());
+	const FWorldRopeBridgeSettings Settings = GetResolvedBridgeSettings();
+	const float ImpulseMagnitude = FMath::Min(
+		Request.ImpulseStrength * Settings.DirectHitImpulseScale,
+		Settings.MaximumDirectHitImpulse);
+	if (!Plank || ImpulseMagnitude <= UE_KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const FVector ImpactPoint = Request.Hit.bBlockingHit && !Request.Hit.ImpactPoint.ContainsNaN()
+		? FVector(Request.Hit.ImpactPoint)
+		: Plank->GetComponentLocation();
+	bUnloadedRecoveryArmed = true;
+	UnloadedRecoveryElapsed = 0.0f;
+	Plank->AddImpulseAtLocation(Request.Direction * ImpulseMagnitude, ImpactPoint);
+}
+
+bool AWorldRopeBridge::HandlesWorldInteractionPhysicsImpulse_Implementation(
+	const FWorldInteractionRequest& Request) const
+{
+	return CanHandleWorldInteraction_Implementation(Request);
 }
 
 UStaticMeshComponent* AWorldRopeBridge::FindBridgePlank(UObject* Component) const

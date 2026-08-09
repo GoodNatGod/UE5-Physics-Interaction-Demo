@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "PhysicsInteractable.h"
 #include "WorldInteractionConfig.h"
 #include "WorldRopeBridge.generated.h"
 
@@ -15,7 +16,7 @@ class UStaticMesh;
 class UStaticMeshComponent;
 
 UCLASS(Blueprintable)
-class ROVERREPLICA_API AWorldRopeBridge : public AActor
+class ROVERREPLICA_API AWorldRopeBridge : public AActor, public IPhysicsInteractable
 {
 	GENERATED_BODY()
 
@@ -25,6 +26,12 @@ public:
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void PostInitializeComponents() override;
 	virtual void Tick(float DeltaSeconds) override;
+	virtual bool CanHandleWorldInteraction_Implementation(
+		const FWorldInteractionRequest& Request) const override;
+	virtual void HandleWorldInteraction_Implementation(
+		const FWorldInteractionRequest& Request) override;
+	virtual bool HandlesWorldInteractionPhysicsImpulse_Implementation(
+		const FWorldInteractionRequest& Request) const override;
 
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Rope Bridge")
 	void RebuildBridge();
@@ -100,6 +107,9 @@ public:
 	float GetLastMovementImpulseMagnitude() const { return LastMovementImpulseMagnitude; }
 
 	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
+	bool IsAttackResponseDampingActive() const { return bAttackResponseDampingActive; }
+
+	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
 	float GetLastJumpTakeoffImpulseMagnitude() const { return LastJumpTakeoffImpulseMagnitude; }
 
 	UFUNCTION(BlueprintPure, Category = "Rope Bridge|Debug")
@@ -173,6 +183,13 @@ private:
 		float DeltaSeconds,
 		bool bAnyBridgeInteraction,
 		const FWorldRopeBridgeSettings& Settings);
+	void UpdateAttackResponseDamping(
+		float DeltaSeconds,
+		bool bAttackAdvanceActive,
+		const FWorldRopeBridgeSettings& Settings);
+	void SetAttackResponseDampingActive(
+		bool bActive,
+		const FWorldRopeBridgeSettings& Settings);
 	void ApplyUnloadedRecoveryTorque(
 		float Alpha,
 		const FWorldRopeBridgeSettings& Settings);
@@ -215,6 +232,8 @@ private:
 	TMap<TWeakObjectPtr<ACharacter>, FCharacterContactState> CharacterContactStates;
 	bool bUnloadedRecoveryArmed = false;
 	float UnloadedRecoveryElapsed = 0.0f;
+	bool bAttackResponseDampingActive = false;
+	float AttackResponseDampingRemaining = 0.0f;
 	float LastMovementImpulseMagnitude = 0.0f;
 	float LastJumpTakeoffImpulseMagnitude = 0.0f;
 	int32 LastJumpTakeoffImpulseAffectedPlankCount = 0;

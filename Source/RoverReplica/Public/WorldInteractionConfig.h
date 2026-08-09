@@ -61,6 +61,28 @@ struct ROVERREPLICA_API FWorldRopeBridgeSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics", meta = (ClampMin = "0.0"))
 	float AngularDamping = 4.0f;
 
+	// [PLACEHOLDER] Weapon hits use a bridge-specific fraction of the standardized direct-hit impulse.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Interaction|Direct Hit", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float DirectHitImpulseScale = 0.05f;
+
+	// [PLACEHOLDER] Caps a weapon hit before it propagates through the bridge constraint chain;
+	// zero disables the bridge's DirectHit impulse response.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Interaction|Direct Hit", meta = (ClampMin = "0.0"))
+	float MaximumDirectHitImpulse = 50.0f;
+
+	// [PLACEHOLDER] Extra rigid-body damping while combat advance transfers load across the deck.
+	// A value of 1 keeps the normal bridge response.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Combat", meta = (ClampMin = "1.0"))
+	float AttackResponseLinearDampingMultiplier = 4.0f;
+
+	// [PLACEHOLDER] Separately damps combat-driven plank rotation without changing walk/jump tuning.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Combat", meta = (ClampMin = "1.0"))
+	float AttackResponseAngularDampingMultiplier = 6.0f;
+
+	// [PLACEHOLDER] Holds combat damping through the delayed constraint-chain response after advance ends.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Character Load|Combat", meta = (ClampMin = "0.0", Units = "s"))
+	float AttackResponseDampingGraceTime = 1.0f;
+
 	// [PLACEHOLDER] Restores the unloaded bridge arc only after every interacting character leaves.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Recovery")
 	bool bEnableUnloadedAngularRecovery = true;

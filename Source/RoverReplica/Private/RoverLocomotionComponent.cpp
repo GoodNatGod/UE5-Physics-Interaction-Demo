@@ -3,6 +3,7 @@
 #include "RoverRootMotionSourceNames.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Curves/CurveFloat.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/RootMotionSource.h"
@@ -29,6 +30,43 @@ bool IsCharacterOnSimulatedBase(
 		Cast<UPrimitiveComponent>(Character->GetMovementBaseObject());
 	return IsValid(MovementBase) && MovementBase->IsSimulatingPhysics();
 }
+
+void ConfigureNormalizedAttackAdvanceCurve(UCurveFloat* Curve, const float EaseAmount)
+{
+	if (!Curve)
+	{
+		return;
+	}
+
+	constexpr int32 IntervalCount = 16;
+	const float ClampedEase = FMath::Clamp(EaseAmount, 0.0f, 1.0f);
+	TArray<FRichCurveKey> Keys;
+	Keys.Reserve(IntervalCount + 1);
+	float Integral = 0.0f;
+	float PreviousValue = 1.0f - ClampedEase;
+	for (int32 Index = 0; Index <= IntervalCount; ++Index)
+	{
+		const float Time = static_cast<float>(Index) / IntervalCount;
+		const float SmoothSpeed = 6.0f * Time * (1.0f - Time);
+		const float Value = FMath::Lerp(1.0f, SmoothSpeed, ClampedEase);
+		Keys.Emplace(Time, Value);
+		if (Index > 0)
+		{
+			Integral += (PreviousValue + Value) * 0.5f / IntervalCount;
+		}
+		PreviousValue = Value;
+	}
+
+	const float Normalization = Integral > UE_KINDA_SMALL_NUMBER
+		? 1.0f / Integral
+		: 1.0f;
+	for (FRichCurveKey& Key : Keys)
+	{
+		Key.Value *= Normalization;
+		Key.InterpMode = RCIM_Linear;
+	}
+	Curve->FloatCurve.SetKeys(Keys);
+}
 }
 
 URoverLocomotionComponent::URoverLocomotionComponent()
@@ -54,6 +92,10 @@ void URoverLocomotionComponent::BeginPlay()
 	{
 		CharacterMovement->PrimaryComponentTick.AddPrerequisite(this, PrimaryComponentTick);
 	}
+	CombatAttackAdvanceStrengthCurve = NewObject<UCurveFloat>(
+		this,
+		TEXT("CombatAttackAdvanceStrengthCurve"),
+		RF_Transient);
 	ApplySettings();
 	UpdateLocomotionState();
 	PreviousLooseDebrisSampleLocation = CharacterOwner->GetActorLocation();
@@ -72,6 +114,14 @@ void URoverLocomotionComponent::TickComponent(
 		return;
 	}
 	UpdateCombatPhysicsPushRestore(DeltaTime);
+	if (CombatMovementRestrictionRequestId > 0 &&
+		CombatPhysicsPushScaleRequestId == 0 &&
+		IsCharacterOnSimulatedBase(CharacterOwner, CharacterMovement))
+	{
+		// An attack can begin on static ground and advance onto a physics body.
+		// Isolate native impact forces as soon as the movement base changes.
+		ApplyCombatPhysicsPushScale(CombatMovementRestrictionRequestId);
+	}
 
 	if (CharacterMovement->IsFalling() && CharacterOwner->GetVelocity().Z < 0.0f)
 	{
@@ -413,6 +463,7 @@ bool URoverLocomotionComponent::StartCombatAttackAdvance(
 		: CombatPhysicsPushScaleRequestId;
 	CancelCombatAttackAdvance(PreviousAttackMovementRequestId);
 	float ResolvedDistance = Distance;
+	float ResolvedDuration = Duration;
 	// The animated start notify can arrive after a one-frame movement-base transition.
 	// Preserve the classification captured when this attack request was accepted.
 	const bool bIsOnSimulatedBase =
@@ -425,8 +476,11 @@ bool URoverLocomotionComponent::StartCombatAttackAdvance(
 			GetSettings().AttackAdvanceScaleOnSimulatedBase,
 			0.0f,
 			1.0f);
+		ResolvedDuration *= FMath::Max(
+			0.05f,
+			GetSettings().AttackAdvanceDurationScaleOnSimulatedBase);
 	}
-	if (Duration <= UE_KINDA_SMALL_NUMBER)
+	if (ResolvedDuration <= UE_KINDA_SMALL_NUMBER)
 	{
 		return true;
 	}
@@ -442,18 +496,41 @@ bool URoverLocomotionComponent::StartCombatAttackAdvance(
 		return false;
 	}
 
-	TSharedPtr<FRootMotionSource_MoveToForce> MoveToSource = MakeShared<FRootMotionSource_MoveToForce>();
-	MoveToSource->InstanceName = RoverRootMotionSourceNames::CombatAttackAdvance();
-	MoveToSource->Priority = 1000;
-	MoveToSource->AccumulateMode = ERootMotionAccumulateMode::Override;
-	MoveToSource->Duration = FMath::Max(0.05f, Duration);
-	MoveToSource->StartLocation = StartLocation;
-	MoveToSource->TargetLocation = StartLocation + AdvanceDirection * ResolvedDistance;
-	MoveToSource->bRestrictSpeedToExpected = true;
-	MoveToSource->FinishVelocityParams.Mode = ERootMotionFinishVelocityMode::ClampVelocity;
-	MoveToSource->FinishVelocityParams.ClampVelocity = GetMaxSpeedForGait(Gait);
+	TSharedPtr<FRootMotionSource> AttackAdvanceSource;
+	if (bIsOnSimulatedBase)
+	{
+		ConfigureNormalizedAttackAdvanceCurve(
+			CombatAttackAdvanceStrengthCurve,
+			GetSettings().AttackAdvanceEaseOnSimulatedBase);
+		TSharedPtr<FRootMotionSource_ConstantForce> ConstantForceSource =
+			MakeShared<FRootMotionSource_ConstantForce>();
+		ConstantForceSource->Force =
+			AdvanceDirection * (ResolvedDistance / FMath::Max(0.05f, ResolvedDuration));
+		ConstantForceSource->StrengthOverTime = CombatAttackAdvanceStrengthCurve;
+		ConstantForceSource->FinishVelocityParams.Mode =
+			ERootMotionFinishVelocityMode::ClampVelocity;
+		ConstantForceSource->FinishVelocityParams.ClampVelocity = 0.0f;
+		AttackAdvanceSource = ConstantForceSource;
+	}
+	else
+	{
+		TSharedPtr<FRootMotionSource_MoveToForce> MoveToSource =
+			MakeShared<FRootMotionSource_MoveToForce>();
+		MoveToSource->StartLocation = StartLocation;
+		MoveToSource->TargetLocation = StartLocation + AdvanceDirection * ResolvedDistance;
+		MoveToSource->bRestrictSpeedToExpected = true;
+		MoveToSource->FinishVelocityParams.Mode = ERootMotionFinishVelocityMode::ClampVelocity;
+		MoveToSource->FinishVelocityParams.ClampVelocity = GetMaxSpeedForGait(Gait);
+		AttackAdvanceSource = MoveToSource;
+	}
+	AttackAdvanceSource->InstanceName = RoverRootMotionSourceNames::CombatAttackAdvance();
+	AttackAdvanceSource->Priority = 1000;
+	AttackAdvanceSource->AccumulateMode = ERootMotionAccumulateMode::Override;
+	AttackAdvanceSource->Settings.SetFlag(
+		ERootMotionSourceSettingsFlags::IgnoreZAccumulate);
+	AttackAdvanceSource->Duration = FMath::Max(0.05f, ResolvedDuration);
 
-	const uint16 SourceId = CharacterMovement->ApplyRootMotionSource(MoveToSource);
+	const uint16 SourceId = CharacterMovement->ApplyRootMotionSource(AttackAdvanceSource);
 	if (SourceId == static_cast<uint16>(ERootMotionSourceID::Invalid))
 	{
 		return false;

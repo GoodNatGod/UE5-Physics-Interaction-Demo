@@ -131,11 +131,15 @@ rover.combat.DrawAttackTraceDuration <秒>
 | 桥是否像可通行路径 | 60 板，约 `16.77m x 4.00m` |
 | 是否有自然弧线 | 初始下垂 `80cm` |
 | 是否有重量 | 单板 `15kg`，角色持续承重 |
-| 跑步是否强于走路 | 最新输入冲量 `124.3 > 47.7` |
+| 跑步是否强于走路 | 最新输入冲量 `125.1 > 46.9` |
 | 离开后是否无限晃 | 10 秒后速度归零，自然姿态误差 `1.13°` |
 | 是否会横向扭曲 | 59 对双侧板缝约束抑制横滚 |
+| 攻击是否保留位移 | 相对脚下板向攻击方向前移 `18.7cm` |
+| 攻击是否会盖过落地 | Attack `158.8cm/s`，Landing `309.2cm/s`，比值 `0.514` |
 
-结构验收已经通过，但体验仍有明确风险：最新完整专项中 Attack01 Recovery 的桥体峰值约 `303.6cm/s`，落地峰值约 `300.2cm/s`。单轮结果已经从明显倒挂收敛到接近持平，但攻击仍略高，Chaos 多轮波动下也没有形成稳定的“落地更强”层级；因此仍需继续定位并固化失败阈值。
+这轮解决的关键不是把整座桥调硬，而是拆开不同物理语义。动态底座攻击推进改为平滑 `ConstantForce`，保留 `0.55` 距离、使用 `2.50` 时长缩放和完整 Ease；角色站立载荷仍为 `1.0`，没有靠减轻角色重量稳定桥面。桥板 DirectHit 由接收者按 `0.05` 倍、最大 `50` 自行消费，木箱通用冲量和 Explosion 径向冲量保持独立。桥自身只在攻击推进及其 `1.0s` 余量窗口使用 `4x / 6x` 线性与角向阻尼。
+
+专项连续执行两次 Attack01 并取最大值。当前攻击峰值 `158.8cm/s / 193.3deg/s`，落地 `309.2cm/s`，Attack / Landing 线速度比 `0.514`，已通过 `<=0.75` 门槛；攻击额外桥体 Movement Impulse、CharacterMovement Push Force 和 World Interaction 均为 `0`。下一阶段仍需补真实刀刃直击桥板、Explosion 压力、多桥性能和有渲染手感验收。
 
 完整说明见 [物理吊桥系统说明](./Docs/物理吊桥系统说明.md)。
 
@@ -150,6 +154,7 @@ rover.combat.DrawAttackTraceDuration <秒>
 | 攻击只有圆形排斥 | 缺少沿刀路的方向目标 | 增加独立前上方吸引尾流 |
 | 爆炸参数变强却覆盖不到粒子 | 力源偏移到了自身半径外 | Point Force 原点限制在 `0.8R` 内 |
 | 落叶一直转圈 | 持续旋转驱动、角阻尼不足、碰撞微能量 | 已完成 Rotation `0/0`、Rotational Drag `8`、Restitution `0` 的源码与迁移逻辑，待有渲染验收 |
+| 桥上普通攻击接近落地强度 | 推进载荷、桥板直击和通用环境冲量共用物理路径 | 拆分推进 / DirectHit / 通用冲量 / Explosion，并增加桥侧战斗阻尼窗口 |
 
 这些修复的共同标准是：不靠缩短寿命或隐藏对象掩盖问题，而是找到输入、空间覆盖、能量来源和生命周期之间的真实矛盾。
 
@@ -186,9 +191,10 @@ rover.combat.DrawAttackTraceDuration <秒>
 | `BuildEditor.ps1` | Runtime / Editor 模块，UE 5.8 Development Editor | 通过 |
 | `ValidatePhysicsWorldLooseDebrisPIE.ps1` | 静止 `0` 场；移动 `1`、攻击 `3`、起跳 `22`、落地 `1`、爆炸 `1`；`interaction_systems=0`、NDC 写入 `28`、预算丢弃 `1`、旋转 `0/0@8` | 通过 |
 | `ValidatePhysicsWorldBoxPhysicsPIE.ps1` | 完整箱 / GC `80kg`、质量相关破裂冲量、重力 `-980cm/s²`、GC 接管连续、碎片展开 `20.1cm` | 通过 |
+| `ValidatePhysicsWorldRopeBridgePIE.ps1` | `60` 板 / `122` 约束；Attack `158.8cm/s`、Landing `309.2cm/s`、比值 `0.514`；相对推进 `18.7cm`；恢复 `0/0` | 通过 |
 | `ValidateRoverPIE.ps1` | GameMode、Pawn、输入映射与跳跃冒烟 | 通过 |
 
-这些数字证明协议和资产状态可回归，不等于最终 VFX 画面、吊桥手感或大世界性能已经验收。
+这些数字证明协议、行为层级和资产状态可回归，不等于最终 VFX 画面、吊桥美术观感或大世界性能已经验收。
 
 最新分阶段规划见 [Roadmap](./Docs/Roadmap.zh-CN.md)。
 
@@ -198,7 +204,7 @@ rover.combat.DrawAttackTraceDuration <秒>
 - 当前 Niagara 杂物是视觉粒子，不宣称拥有真实 kg、权威碰撞或网络同步；
 - 当前 CPU Sim P0 不等于已经证明 GPU 大规模方案；
 - Wood 的物理和反馈链最完整，其他表面仍需差异化美术与声音；
-- 吊桥结构通过不代表攻击 / 落地手感倒挂已经解决；
+- 吊桥攻击 / 落地自动层级已通过，但真实刀刃直击、Explosion、多桥性能和有渲染体验仍待验收；
 - 无头 PIE 没有像素证据，最终 VFX 观感必须在有渲染运行中确认；
 - 当前没有提交多 Cell、远原点、World Partition / HLOD 和固定硬件性能结论。
 
@@ -217,6 +223,7 @@ rover.combat.DrawAttackTraceDuration <秒>
 ## 文档索引
 
 - [2026-08-09：Niagara 常驻地表杂物交互复盘](./Docs/InteractionDesignLog-2026-08-09.zh-CN.md)
+- [2026-08-09：吊桥攻击响应分层复盘](./Docs/InteractionDesignLog-2026-08-09-RopeBridgeAttackResponse.zh-CN.md)
 - [Niagara 地表轻质杂物交互系统说明](./Docs/Niagara地表轻质杂物交互系统方案.md)
 - [2026-08-08：扩展交互输入系统](./Docs/InteractionDesignLog-2026-08-08.zh-CN.md)
 - [2026-08-07：动态吊桥结构与体验调优](./Docs/InteractionDesignLog-2026-08-07.zh-CN.md)

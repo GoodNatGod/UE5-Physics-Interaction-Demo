@@ -9,6 +9,11 @@ BRIDGE_TAG = "PhysicsWorldRopeBridge"
 
 BRIDGE_TUNING = {
     "swing2_limit_degrees": 0.8,
+    "direct_hit_impulse_scale": 0.05,
+    "maximum_direct_hit_impulse": 50.0,
+    "attack_response_linear_damping_multiplier": 4.0,
+    "attack_response_angular_damping_multiplier": 6.0,
+    "attack_response_damping_grace_time": 1.0,
     "enable_unloaded_angular_recovery": True,
     "unloaded_recovery_delay": 0.5,
     "unloaded_recovery_blend_in_time": 1.0,
@@ -23,7 +28,9 @@ BRIDGE_TUNING = {
 }
 MOVEMENT_TUNING = {
     "gravity_scale": 1.40,
-    "attack_advance_scale_on_simulated_base": 0.65,
+    "attack_advance_scale_on_simulated_base": 0.55,
+    "attack_advance_duration_scale_on_simulated_base": 2.50,
+    "attack_advance_ease_on_simulated_base": 1.0,
     "attack_physics_push_scale_on_simulated_base": 0.0,
     "attack_standing_downward_force_scale_on_simulated_base": 1.0,
 }

@@ -165,7 +165,17 @@ struct ROVERREPLICA_API FRoverMovementSettings
 	// [PLACEHOLDER] Retains a readable combat lunge on simulated movement bases without restoring
 	// CharacterMovement's native physics push force.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float AttackAdvanceScaleOnSimulatedBase = 0.65f;
+	float AttackAdvanceScaleOnSimulatedBase = 0.55f;
+
+	// [PLACEHOLDER] Spreads the same bridge-relative attack displacement over a longer interval.
+	// This reduces the load-transfer spike without changing the authored advance distance.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.05"))
+	float AttackAdvanceDurationScaleOnSimulatedBase = 2.50f;
+
+	// [PLACEHOLDER] Blends the dynamic-base advance from constant speed (0) to a
+	// normalized smooth start/stop profile (1) while preserving total displacement.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AttackAdvanceEaseOnSimulatedBase = 1.0f;
 
 	// [PLACEHOLDER] Prevents CharacterMovement's native blocking-hit push force from
 	// injecting a combat spike into a simulated movement base. Standing load is unchanged.
@@ -173,7 +183,7 @@ struct ROVERREPLICA_API FRoverMovementSettings
 	float AttackPhysicsPushScaleOnSimulatedBase = 0.0f;
 
 	// [PLACEHOLDER] Scales only the character's continuous standing load during attacks on a
-	// simulated base. Keep this at 1 to avoid unloading and rebounding a bridge when combat starts.
+	// simulated base. Keep full weight here; the bridge owns its separate combat-response damping.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float AttackStandingDownwardForceScaleOnSimulatedBase = 1.0f;
 

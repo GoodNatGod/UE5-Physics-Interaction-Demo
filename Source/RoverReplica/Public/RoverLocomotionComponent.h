@@ -8,6 +8,7 @@
 
 class ACharacter;
 class UCharacterMovementComponent;
+class UCurveFloat;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FRoverLocomotionStateChanged, ERoverLocomotionState, PreviousState, ERoverLocomotionState, NewState);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FRoverGaitChanged, ERoverGait, PreviousGait, ERoverGait, NewGait);
@@ -263,6 +264,10 @@ private:
 	int32 CombatMovementRestrictionRequestId = 0;
 	int32 CombatAttackAdvanceRequestId = 0;
 	uint16 CombatAttackRootMotionSourceId = 0;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UCurveFloat> CombatAttackAdvanceStrengthCurve;
+
 	int32 CombatPhysicsPushScaleRequestId = 0;
 	float CachedCombatInitialPushForceFactor = 0.0f;
 	float CachedCombatPushForceFactor = 0.0f;
