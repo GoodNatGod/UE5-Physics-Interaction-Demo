@@ -1,10 +1,17 @@
 import math
+import os
 
 import unreal
 
 
-MAP_PATH = "/Game/ThirdPerson/Lvl_ThirdPerson"
+MAP_PATH = os.environ.get(
+    "ROVER_ROPE_BRIDGE_TUNING_MAP",
+    "/Game/ThirdPerson/Lvl_ThirdPerson",
+)
+CONFIG_PATH = "/Game/PhysicsWorldDemo/Config/DA_WorldInteractionConfig"
 MOVEMENT_CONFIG_PATH = "/Game/Rover/Config/DA_RoverMovementConfig"
+BLUEPRINT_PATH = "/Game/PhysicsWorldDemo/Blueprints/BP_RopeBridge"
+BLUEPRINT_CLASS_PATH = f"{BLUEPRINT_PATH}.BP_RopeBridge_C"
 BRIDGE_TAG = "PhysicsWorldRopeBridge"
 
 BRIDGE_TUNING = {
@@ -56,11 +63,6 @@ def find_bridge():
             f"Actor tagged {BRIDGE_TAG} is not a WorldRopeBridge: "
             f"{bridge.get_path_name()}"
         )
-    if not bool(bridge.get_editor_property("override_shared_settings")):
-        raise RuntimeError(
-            f"Bridge instance must already use Override Shared Settings: "
-            f"{bridge.get_path_name()}"
-        )
     return bridge
 
 
@@ -105,12 +107,16 @@ def main():
         raise RuntimeError(f"Failed to load map: {MAP_PATH}")
 
     bridge = find_bridge()
+    config = unreal.load_asset(CONFIG_PATH)
+    if not isinstance(config, unreal.WorldInteractionConfig):
+        raise RuntimeError(f"Missing World Interaction config: {CONFIG_PATH}")
     movement_config = unreal.load_asset(MOVEMENT_CONFIG_PATH)
     if not isinstance(movement_config, unreal.RoverMovementConfig):
         raise RuntimeError(f"Missing Rover movement config: {MOVEMENT_CONFIG_PATH}")
 
-    # Read the instance override directly so every unlisted hand-tuned value remains intact.
-    bridge_settings = bridge.get_editor_property("override_settings")
+    # The shared DataAsset is authoritative; unlisted bridge values remain intact.
+    world_settings = config.get_editor_property("settings")
+    bridge_settings = world_settings.get_editor_property("rope_bridge")
     movement_settings = movement_config.get_editor_property("settings")
     bridge_before = read_values(bridge_settings, BRIDGE_TUNING)
     movement_before = read_values(movement_settings, MOVEMENT_TUNING)
@@ -131,14 +137,33 @@ def main():
     }
 
     apply_values(bridge_settings, BRIDGE_TUNING)
-    bridge.set_editor_property("override_settings", bridge_settings)
+    config.modify()
+    world_settings.set_editor_property("rope_bridge", bridge_settings)
+    config.set_editor_property("settings", world_settings)
+    movement_config.modify()
     apply_values(movement_settings, MOVEMENT_TUNING)
     movement_config.set_editor_property("settings", movement_settings)
 
+    blueprint = unreal.load_asset(BLUEPRINT_PATH)
+    generated_class = unreal.load_object(None, BLUEPRINT_CLASS_PATH)
+    if not isinstance(blueprint, unreal.Blueprint) or generated_class is None:
+        raise RuntimeError(f"Missing rope-bridge Blueprint: {BLUEPRINT_PATH}")
+    default_object = unreal.get_default_object(generated_class)
+    if not isinstance(default_object, unreal.WorldRopeBridge):
+        raise RuntimeError(f"Invalid rope-bridge Blueprint CDO: {BLUEPRINT_CLASS_PATH}")
+    default_object.modify()
+    default_object.set_editor_property("interaction_config", config)
+    default_object.set_editor_property("override_shared_settings", False)
+    blueprint.modify()
+
+    bridge.modify()
+    bridge.set_editor_property("interaction_config", config)
+    bridge.set_editor_property("override_shared_settings", False)
+
     verify_values(
-        bridge.get_editor_property("override_settings"),
+        config.get_editor_property("settings").get_editor_property("rope_bridge"),
         BRIDGE_TUNING,
-        "bridge.override_settings",
+        "world_interaction_config.settings.rope_bridge",
     )
     verify_values(
         movement_config.get_editor_property("settings"),
@@ -147,17 +172,40 @@ def main():
     )
 
     bridge.rebuild_bridge()
+    resolved_settings = bridge.get_resolved_bridge_settings()
+    shared_settings = config.get_editor_property("settings").get_editor_property(
+        "rope_bridge"
+    )
+    if resolved_settings.to_tuple() != shared_settings.to_tuple():
+        raise RuntimeError(
+            "Bridge resolved settings differ from the shared DataAsset: "
+            f"resolved={resolved_settings.export_text()} "
+            f"shared={shared_settings.export_text()}"
+        )
+    if bool(bridge.get_editor_property("override_shared_settings")) or bool(
+        default_object.get_editor_property("override_shared_settings")
+    ):
+        raise RuntimeError("Rope-bridge instance or Blueprint still enables override")
+    if not unreal.EditorAssetLibrary.save_loaded_asset(
+        config, only_if_is_dirty=False
+    ):
+        raise RuntimeError(f"Failed to save asset: {CONFIG_PATH}")
     if not unreal.EditorAssetLibrary.save_loaded_asset(
         movement_config, only_if_is_dirty=False
     ):
         raise RuntimeError(f"Failed to save asset: {MOVEMENT_CONFIG_PATH}")
+    if not unreal.EditorAssetLibrary.save_loaded_asset(
+        blueprint, only_if_is_dirty=False
+    ):
+        raise RuntimeError(f"Failed to save asset: {BLUEPRINT_PATH}")
     if not unreal.EditorLoadingAndSavingUtils.save_map(world, MAP_PATH):
         raise RuntimeError(f"Failed to save map: {MAP_PATH}")
 
     unreal.log(
         "ROPE_BRIDGE_STABILITY_TUNING_OK "
         f"actor={bridge.get_path_name()} "
-        f"map={MAP_PATH} movement_asset={MOVEMENT_CONFIG_PATH} "
+        f"map={MAP_PATH} shared_asset={CONFIG_PATH} "
+        f"movement_asset={MOVEMENT_CONFIG_PATH} override=false "
         f"bridge_before=[{compact_values(bridge_before)}] "
         f"bridge_after=[{compact_values(BRIDGE_TUNING)}] "
         f"movement_before=[{compact_values(movement_before)}] "

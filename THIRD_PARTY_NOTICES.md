@@ -4,9 +4,11 @@ This repository is a source-code and technical-documentation portfolio for an Un
 
 ## Assets not included
 
-The local playable project uses separately obtained third-party character, animation, texture, and weapon assets. Their distribution terms prohibit publishing the source files to public download locations. The original FBX files and all imported or derived assets under `Content/Rover/` are therefore intentionally excluded from this repository.
+The local playable project uses separately obtained third-party character, animation, texture, weapon, and environment-kit assets. Their distribution terms prohibit publishing the source files to public download locations. The original FBX files and all imported or derived assets under `Content/Rover/` and `Content/ModularLostRuinKit/` are therefore intentionally excluded from this repository.
 
-Screenshots and videos rendered from the local project may be used for portfolio presentation where permitted by the source asset terms, but they do not grant any right to redistribute the underlying assets.
+The local loose-debris materials reference `T_Fol_HangingLeaves_BC` and `T_Fol_Leafs_BC` from ModularLostRuinKit, and the local showcase crate uses that pack's wooden-box art. This repository retains original project materials, Niagara systems, generation scripts, and soft-reference paths that can consume those assets, but it does not redistribute the source textures, meshes, source materials, derived `GC_PW_WoodenBox1_Fractured`, maps, or World Partition external actors. A public clone without the separately licensed pack will not reproduce the final local art pass.
+
+The rendered video is included only for portfolio presentation where permitted by the source asset terms; it does not grant any right to extract or redistribute the underlying assets.
 
 ## Trademarks and engine content
 

@@ -7,6 +7,7 @@
 #include "WorldInteractionConfig.h"
 #include "WorldDestructibleBox.generated.h"
 
+class UGeometryCollection;
 class UGeometryCollectionComponent;
 class UPhysicalMaterial;
 class UStaticMeshComponent;
@@ -113,6 +114,12 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "World Interaction|Config")
 	TObjectPtr<UWorldInteractionConfig> InteractionConfig;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "World Interaction|Destructible|Assets")
+	TSoftObjectPtr<UStaticMesh> IntactMeshAsset;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "World Interaction|Destructible|Assets")
+	TSoftObjectPtr<UGeometryCollection> FracturedGeometryCollectionAsset;
 
 	// Per-instance override. Zero uses DestructibleBoxDefaultMassKg from the shared config.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "World Interaction|Physics", meta = (ClampMin = "0.0", Units = "kg"))

@@ -1,13 +1,13 @@
 # 交互设计日志 | 2026-08-09
 
-> 主题：Niagara 常驻地表轻质杂物交互
+> 主题：Niagara 常驻地表杂物、运行时调试与吊桥配置收口
 > 视角：大世界物理交互策划 / 技术美术（物理方向）
 > 引擎：Unreal Engine 5.8
 > 当前定位：营地垂直切片 P0，不以当前场景直接宣称完成大世界验证
 
 ## 今日目标
 
-今天解决的不是“角色动作触发一团落叶特效”，而是让场景里原本就存在的落叶和纸片成为环境的一部分：玩家经过、挥刀、起跳、落地或制造爆炸时，同一批地表杂物被带动；外力结束后，它们重新落地、减速并恢复安静，等待下一次交互。
+今天解决的不是“角色动作触发一团落叶特效”，而是让场景里原本就存在的两种叶片成为环境的一部分：玩家经过、挥刀、起跳、落地或制造爆炸时，同一批地表杂物被带动；外力结束后，它们重新落地、减速并恢复安静，等待下一次交互。晚间继续收口了游戏内调试开关与吊桥共享配置权威，保证观察、调参和回归读取同一套状态。
 
 这套系统需要同时满足五个体验要求：
 
@@ -51,7 +51,7 @@
 
 ### 2. 把表现物理与玩法物理分层
 
-木箱和吊桥承担玩法语义：它们有真实刚体质量、约束、碰撞和可通行结果。落叶与纸片承担表现语义：它们用于放大速度、方向和冲击，不参与阻挡、伤害或网络权威判定。
+木箱和吊桥承担玩法语义：它们有真实刚体质量、约束、碰撞和可通行结果。两种叶片承担表现语义：它们用于放大速度、方向和冲击，不参与阻挡、伤害或网络权威判定。
 
 因此本轮没有复用会执行 Overlap、接口路由和真实刚体冲量的 `SubmitWorldInteraction()`，而是新增轻量场协议：
 
@@ -61,7 +61,7 @@ flowchart LR
     B --> C["UWorldInteractionSubsystem 校验与限流"]
     C --> D["Region 空间相交判断"]
     D --> E["Ambient Niagara 运行时力参数"]
-    E --> F["同一批落叶 / 纸片位移、回落、静止"]
+    E --> F["同一批两种叶片位移、回落、静止"]
     C -. "仅保留未来扩展与诊断写入" .-> G["Niagara Data Channel"]
     C -. "不进入" .-> H["Chaos 木箱 / 吊桥"]
 ```
@@ -105,7 +105,7 @@ flowchart LR
 - 落地半径 `240cm`，强度按垂直速度在 `450~1100` 之间映射；
 - 落地上抬 `380`，持续 `0.16s`。
 
-体验层级应满足：普通落地明显强于行走，重落地明显强于普通落地；起跳是短促蹬地，不能比高处落地更像爆炸。自动化能证明事件只发布一次和速度映射有效，最终强弱仍需要有渲染 PIE 以同一路线对比。
+体验层级应满足：普通落地明显强于行走，重落地明显强于普通落地；起跳是短促蹬地，不能比高处落地更像爆炸。当前自动化能观察到 Jump / Landing 来源进入同一 Region，但尚未按 SourceType 独立计数，也没有用两组下坠速度断言映射曲线；最终强弱仍需要有渲染 PIE 以同一路线对比。
 
 ### 攻击：排斥负责掀起，吸引负责尾流
 
@@ -176,6 +176,18 @@ flowchart LR
 - `Pitch=-45deg` 的纯 Ambient 与交互预览均保持可见；
 - 这项修复只解决整套 Renderer 裁剪，不掩盖个别 Sprite 贴地变薄或碰撞闪烁。
 
+### 第二种叶片替换白色纸片
+
+原 Paper Emitter 的白色矩形只承担占位用途，运行时容易被读成垃圾纸而不是林地杂物。本轮没有改变它的交互规则，而是只替换 Renderer 外观：
+
+- 目标图集：`/Game/ModularLostRuinKit/Textures/Nature/Foliage/T_Fol_Leafs_BC`；
+- 选择五瓣浅色叶花，UV Offset `(769/2048, 186/2048)`；
+- UV Scale `(216/2048, 216/2048)`，裁掉相邻枝叶；
+- 继续复用原有碰撞、生命周期、Point Force 和粒子预算；
+- `PaperParticleFraction`、`AmbientPaperRotationStrength`、`M_LooseDebris_Paper` 仅作为兼容命名保留。
+
+这里刻意把“外观替换”和“交互参数”分开。换图不应让走路、攻击或爆炸力度发生变化，也不需要为一次美术迭代迁移运行时 Schema。图集属于第三方商业资源，公开仓库只保存自制材质图、Niagara 资产和裁切参数，不分发源贴图。
+
 ### 配置迁移规则
 
 Niagara 图和 DataAsset 可能早于 C++ 默认值存在，单改源码不会自动改写旧二进制资产。为防止“代码看起来修了，场景仍读旧值”，`DA_WorldLooseDebrisConfig` 增加 `AssetSchemaVersion`：
@@ -214,10 +226,13 @@ DataAsset 数值在 Region / Niagara Component 下次激活时读取，手调后
 ### 运行时可视化
 
 ```text
-pw.LooseDebris.DrawFields 0/1
+pw.LooseDebris.DrawFields -1/0/1
+rover.combat.DrawAttackTrace -1/0/1
 ```
 
-编辑器开发环境默认开启轻量场绘制，便于同时观察：
+两个 CVar 统一使用三态：`-1` 跟随各自 DataAsset，`0` 强制关闭，`1` 强制开启。游戏中按 `Caps Lock` 会把二者同步切换，便于一次观察武器 Sweep 与环境受力场；关闭只停止绘制，不影响武器碰撞、伤害、NDC 写入或粒子受力。如果手工把两个 CVar 设成不同状态，第一次按键会先统一关闭，再次按下统一开启。该开关是单机 Demo 的进程级调试状态，不作为多人玩家设置。
+
+可视化用于同时观察：
 
 - Movement 胶囊和速度方向；
 - Attack 刀身胶囊、释放力范围和尾流方向；
@@ -250,17 +265,19 @@ movement_fields=1
 attack_fields=2
 attack_wake=1
 force_coverage=1
-jump_fields=21
+jump_fields=28
 landing_fields=1
 explosion_fields=1
 interaction_systems=0
-ndc_writes=26
+ndc_writes=33
 budget_drops=1
 ground_projected=1
 ambient_rotation=0.00/0.00@8.00
 lifecycle=0.4s->15.0s
 chaos_requests=0
 ```
+
+这里的 `jump_fields=28` 是测试在进入 Jump 阶段后读取的累计发布数，阶段内还包含等待与移动产生的其他字段，不代表起跳触发了 28 次。当前可靠结论是 Jump / Landing 来源都被观察到；若要证明“每次只发一次”与速度映射，需给统计按 `SourceType` 分桶并增加多下坠速度断言。
 
 它证明所有生产者都能影响同一个 Ambient Region，攻击尾流与限流规则已生效，而且轻量场没有误入 Chaos 请求链。它不读取最终像素，因此不能据此宣布“落叶已经不转圈”或“尾流力度已经完美”。
 
@@ -279,11 +296,46 @@ chaos_requests=0
 | 落叶一直原地旋转 | Ambient 持续 Rotation Strength + 低角阻尼 + 碰撞微能量 | Rotation `0/0`、Rotational Drag `8`、Calming `12`、Restitution `0` | 恢复安静必须单独设计能量出口 |
 | 镜头向下时整片消失 | World Space 粒子超出 Fixed Bounds，固定包围盒离开视锥后整套 Renderer 被裁剪 | CPU Emitter 改用 Dynamic Bounds，并用 `Pitch=-45deg` 预览 | 粒子是否存在与渲染边界是否可见必须分开诊断 |
 
+## 晚间系统收口
+
+### 运行时调试不再由编辑器默认值绑架
+
+此前武器 Trace 与 Loose Debris 力场在编辑器构建中默认强制开启，即使 DataAsset 关闭也会继续绘制。现在两个 CVar 的默认值均为 `-1`，分别读取 `DA_RoverCombatConfig.bDrawAttackTrace` 与 `DA_WorldLooseDebrisConfig.bDrawDebugFields`；`Caps Lock` 只在需要观察时写入显式 `0/1`。这使“策划默认设置”和“临时调试覆盖”拥有明确优先级。
+
+### 吊桥参数从关卡实例回收到共享 DataAsset
+
+实机 Demo 的桥长期依赖 `OverrideSettings`，虽然手感已经调好，但共享 `DA_WorldInteractionConfig` 并不是实际权威。晚间用显式源地图参数读取 tagged `BP_RopeBridge`，将完整 `58` 个 Override 字段复制到 `Settings.RopeBridge`，随后让 Blueprint CDO 与关卡实例都指向该 DataAsset 并关闭 Override。旧 Override payload 保留用于审计，但已不生效。
+
+迁移后的关键配置为：`60` 板、单板 `400 x 25 x 6cm`、Gap `3cm`、Sag `80cm`、单板 `15kg`、基础阻尼 `1.5 / 4.0`、Swing `14 / 0.8 / 0deg`。专项同时验证 Actor resolved settings、Blueprint CDO 与共享 Struct 完全一致，避免只比较几个显眼字段。
+
+最新复验结果：
+
+| 体验证据 | 结果 |
+|---|---:|
+| 两次 Attack01 最大线 / 角速度 | `90.2cm/s / 206.0deg/s` |
+| Landing 峰值 | `309.3cm/s` |
+| Attack / Landing | `0.292` |
+| 相对脚下板推进 | `18.3cm` |
+| Walk / Run 输入冲量 | `46.9 / 123.4` |
+| 离桥恢复 / 自然姿态误差 | `0/0`、`1.13deg` |
+| 端点 / 板间误差 | `0.62 / 0.99cm` |
+
+### 输入载体的小范围收招修正
+
+物理交互 Demo 仍使用现有战斗作为输入载体。重击·鸣奏结束时曾因 Montage Blend Out 只有 `0.15s` 出现全身姿态闪切，本轮将 Blend Out 与 Trigger Time 调为 `0.25s`，只增加收招到站立的混合时间，不改变伤害、命中窗口或环境冲量。
+
+### 本地展示场景与木箱美术替换
+
+当前实机展示初始化在 `ExampleMap_Lumen`，出生区域的木箱使用 `SM_WoodenBox1` 制作对应 Fracture Geometry Collection，并已完成手动 PIE 一刀破裂确认。Runtime 把完整态 Mesh 与破裂 Collection 暴露为 Soft Object Reference：完整本地工程优先加载展示资产，公开环境缺少商业包或派生 GC 时回退到自制 Demo 箱，不改变一刀破坏、质量、重力、冲量和 Chaos Break 事件规则。
+
+这里把“交互规则”和“展示外观”分开交付。`ModularLostRuinKit` Mesh、贴图、派生几何、`ExampleMap_Lumen` 及其 External Actor 不进入公开仓库；README 视频只作为实机结果展示，不授予底层第三方资产的再分发权。
+
 ## 当前边界
 
 - 当前 Ambient 采用 CPU Sim，适合证明交互规则和调参链路，不宣称已经完成大世界 GPU 粒子扩量；
 - Data Channel 已建立并写入，但当前没有 Reader；Region 只通过委托和 User 参数驱动 Ambient，Islands / GPU 消费仍需 A/B 测试；
-- 当前叶片和纸片是低成本表现物，不具备真实 kg、阻挡、拾取和网络权威语义；
+- 当前两种叶片是低成本表现物，不具备真实 kg、阻挡、拾取和网络权威语义；
+- 第二叶片使用的第三方 foliage atlas、角色素材和完整测试关卡不随公开作品集仓库分发；
 - 还没有提交固定硬件下的 Niagara Game / Render / GPU p50、p95 数据；
 - 单 Region CPU Dynamic Bounds 已通过当前镜头俯仰观察，但多 Region、World Partition Cell、LWC 远原点、区域边缘和 Bounds 更新成本仍未验收；
 - 无头 PIE 不检查最终画面，持续旋转修复仍应以实际有渲染 PIE 做最终观感确认。

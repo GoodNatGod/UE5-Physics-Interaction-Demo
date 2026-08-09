@@ -243,7 +243,17 @@ def begin_validation(world):
         fail(f"map has no tagged {REGION_TAG} actor")
         return
     if not region.is_ambient_effect_active():
-        state["last"] = "waiting for ambient Niagara activation"
+        ambient_component = region.get_component_by_class(unreal.NiagaraComponent)
+        ambient_asset = (
+            ambient_component.get_editor_property("asset")
+            if ambient_component
+            else None
+        )
+        state["last"] = (
+            "waiting for ambient Niagara activation "
+            f"component={ambient_component is not None} "
+            f"asset={ambient_asset.get_path_name() if ambient_asset else 'none'}"
+        )
         return
 
     disable_demo_targets(world)

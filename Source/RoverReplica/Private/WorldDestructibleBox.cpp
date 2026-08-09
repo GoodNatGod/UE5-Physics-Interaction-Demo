@@ -15,6 +15,10 @@
 AWorldDestructibleBox::AWorldDestructibleBox()
 {
 	PrimaryActorTick.bCanEverTick = false;
+	IntactMeshAsset = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(
+		TEXT("/Game/ModularLostRuinKit/Models/Props/SM_WoodenBox1.SM_WoodenBox1")));
+	FracturedGeometryCollectionAsset = TSoftObjectPtr<UGeometryCollection>(FSoftObjectPath(
+		TEXT("/Game/PhysicsWorldDemo/GeometryCollections/GC_PW_WoodenBox1_Fractured.GC_PW_WoodenBox1_Fractured")));
 
 	IntactMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("IntactMesh"));
 	SetRootComponent(IntactMesh);
@@ -46,9 +50,14 @@ void AWorldDestructibleBox::BeginPlay()
 	EnsureIntactMeshActorRoot();
 	if (IntactMesh)
 	{
-		if (UStaticMesh* CrateMesh = LoadObject<UStaticMesh>(
-			nullptr,
-			TEXT("/Game/PhysicsWorldDemo/Meshes/SM_Demo_WoodenCrate.SM_Demo_WoodenCrate")))
+		UStaticMesh* CrateMesh = IntactMeshAsset.LoadSynchronous();
+		if (!CrateMesh)
+		{
+			CrateMesh = LoadObject<UStaticMesh>(
+				nullptr,
+				TEXT("/Game/PhysicsWorldDemo/Meshes/SM_Demo_WoodenCrate.SM_Demo_WoodenCrate"));
+		}
+		if (CrateMesh)
 		{
 			IntactMesh->SetStaticMesh(CrateMesh);
 		}
@@ -59,11 +68,16 @@ void AWorldDestructibleBox::BeginPlay()
 			nullptr,
 			TEXT("/Game/PhysicsWorldDemo/Config/DA_WorldInteractionConfig.DA_WorldInteractionConfig"));
 	}
-	if (GeometryCollection && !GeometryCollection->GetRestCollection())
+	if (GeometryCollection)
 	{
-		if (UGeometryCollection* Collection = LoadObject<UGeometryCollection>(
-			nullptr,
-			TEXT("/Game/PhysicsWorldDemo/GeometryCollections/GC_Demo_WoodenCrate_Fractured.GC_Demo_WoodenCrate_Fractured")))
+		UGeometryCollection* Collection = FracturedGeometryCollectionAsset.LoadSynchronous();
+		if (!Collection && !GeometryCollection->GetRestCollection())
+		{
+			Collection = LoadObject<UGeometryCollection>(
+				nullptr,
+				TEXT("/Game/PhysicsWorldDemo/GeometryCollections/GC_Demo_WoodenCrate_Fractured.GC_Demo_WoodenCrate_Fractured"));
+		}
+		if (Collection && GeometryCollection->GetRestCollection() != Collection)
 		{
 			GeometryCollection->SetRestCollection(Collection);
 		}

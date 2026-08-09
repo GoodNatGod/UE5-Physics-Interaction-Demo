@@ -1,8 +1,17 @@
+import os
+
 import unreal
 
 
-MAP_PATH = "/Game/ThirdPerson/Lvl_ThirdPerson"
+MAP_PATH = os.environ.get(
+    "ROVER_ROPE_BRIDGE_INSPECT_MAP",
+    "/Game/ThirdPerson/Lvl_ThirdPerson",
+)
 BRIDGE_TAG = "PhysicsWorldRopeBridge"
+CONFIG_PATH = "/Game/PhysicsWorldDemo/Config/DA_WorldInteractionConfig"
+BLUEPRINT_CLASS_PATH = (
+    "/Game/PhysicsWorldDemo/Blueprints/BP_RopeBridge.BP_RopeBridge_C"
+)
 SECONDARY_ANCHOR_TAG = "RopeBridgeSecondaryAnchor"
 SUPPORT_PROPERTIES = (
     "left_support",
@@ -48,6 +57,28 @@ def main():
 
     bridge = bridges[0]
     settings = bridge.get_resolved_bridge_settings()
+    config = unreal.load_asset(CONFIG_PATH)
+    generated_class = unreal.load_object(None, BLUEPRINT_CLASS_PATH)
+    default_object = (
+        unreal.get_default_object(generated_class) if generated_class else None
+    )
+    if not isinstance(config, unreal.WorldInteractionConfig):
+        raise RuntimeError(f"Missing shared config: {CONFIG_PATH}")
+    if not isinstance(default_object, unreal.WorldRopeBridge):
+        raise RuntimeError(f"Missing BP_RopeBridge CDO: {BLUEPRINT_CLASS_PATH}")
+    shared_settings = config.get_editor_property("settings").get_editor_property(
+        "rope_bridge"
+    )
+    if settings.to_tuple() != shared_settings.to_tuple():
+        raise RuntimeError("Bridge resolved settings differ from shared config")
+    if bool(bridge.get_editor_property("override_shared_settings")) or bool(
+        default_object.get_editor_property("override_shared_settings")
+    ):
+        raise RuntimeError("Bridge actor or Blueprint CDO still enables override")
+    if bridge.get_editor_property("interaction_config") != config or default_object.get_editor_property(
+        "interaction_config"
+    ) != config:
+        raise RuntimeError("Bridge actor or Blueprint CDO is not bound to shared config")
     constraint_count = bridge.get_generated_constraint_count()
     constraints = [
         bridge.get_constraint_component(index) for index in range(constraint_count)
@@ -116,6 +147,7 @@ def main():
         f"location={bridge_location.x:.1f},{bridge_location.y:.1f},{bridge_location.z:.1f} "
         f"player_start_distance={start_distance:.1f}cm "
         f"override={str(bool(bridge.get_editor_property('override_shared_settings'))).lower()} "
+        f"shared_config=true blueprint_shared=true "
         f"planks={plank_count} "
         f"visible_length={visible_length:.1f}cm "
         f"width={float(settings.get_editor_property('plank_width')):.1f} "

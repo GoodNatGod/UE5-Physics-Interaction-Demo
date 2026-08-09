@@ -17,16 +17,10 @@
 #include "PhysicsEngine/BodyInstance.h"
 #include "Sound/SoundBase.h"
 
-#if WITH_EDITOR
-static constexpr int32 DefaultDrawLooseDebrisFields = 1;
-#else
-static constexpr int32 DefaultDrawLooseDebrisFields = 0;
-#endif
-
 static TAutoConsoleVariable<int32> CVarDrawLooseDebrisFields(
 	TEXT("pw.LooseDebris.DrawFields"),
-	DefaultDrawLooseDebrisFields,
-	TEXT("0=Off  1=Draw lightweight movement, weapon, landing, and explosion fields."),
+	-1,
+	TEXT("-1=Use LooseDebrisConfig  0=Force off  1=Force on for lightweight interaction fields."),
 	ECVF_Cheat);
 
 void UWorldInteractionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -413,7 +407,11 @@ void UWorldInteractionSubsystem::DrawLightweightInteractionField(
 	const FWorldLightweightInteractionField& Field) const
 {
 	const FWorldLooseDebrisSettings& Settings = GetLooseDebrisSettings();
-	if (!Settings.bDrawDebugFields && CVarDrawLooseDebrisFields.GetValueOnGameThread() == 0)
+	const int32 ConsoleOverride = CVarDrawLooseDebrisFields.GetValueOnGameThread();
+	const bool bShouldDraw = ConsoleOverride >= 0
+		? ConsoleOverride != 0
+		: Settings.bDrawDebugFields;
+	if (!bShouldDraw)
 	{
 		return;
 	}

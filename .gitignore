@@ -27,8 +27,12 @@ Content/Developers/
 .workbuddy/
 AGENTS.md
 
-# Third-party character, animation, texture, and weapon assets are intentionally excluded.
+# Third-party character, animation, texture, weapon, and environment assets are intentionally excluded.
 Content/Rover/
+Content/ModularLostRuinKit/
+
+# Local World Partition / external actor data can retain references to excluded packs.
+Content/__ExternalActors__/
 
 # Local OS files
 .DS_Store

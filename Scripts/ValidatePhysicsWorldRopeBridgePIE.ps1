@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$EngineRoot,
+    [string]$EngineRoot = "D:\unreal\UE_5.8",
+    [string]$MapPath = "/Game/ThirdPerson/Lvl_ThirdPerson",
     [ValidateRange(30, 600)][int]$TimeoutSeconds = 180
 )
 
@@ -25,6 +26,9 @@ if (-not (Test-Path -LiteralPath $editorCommand -PathType Leaf)) {
 if (Get-Process -Name "UnrealEditor" -ErrorAction SilentlyContinue) {
     throw "Close Unreal Editor before running the Physics World rope-bridge PIE validation."
 }
+if ([string]::IsNullOrWhiteSpace($MapPath) -or -not $MapPath.StartsWith("/Game/")) {
+    throw "MapPath must be a non-empty Unreal package path below /Game/."
+}
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $validationLog = Join-Path ([IO.Path]::GetTempPath()) "PhysicsWorld-RopeBridge-PIE-$timestamp-$PID.log"
@@ -45,18 +49,37 @@ $editorArguments = @(
     "-LocalDataCachePath=$localDataCache"
 )
 
-$editorProcess = Start-Process `
-    -FilePath $editorCommand `
-    -ArgumentList $editorArguments `
-    -PassThru `
-    -WindowStyle Hidden
+$mapEnvironmentName = "ROVER_ROPE_BRIDGE_VALIDATION_MAP"
+$previousMapEnvironment = [Environment]::GetEnvironmentVariable(
+    $mapEnvironmentName,
+    [EnvironmentVariableTarget]::Process
+)
+try {
+    [Environment]::SetEnvironmentVariable(
+        $mapEnvironmentName,
+        $MapPath,
+        [EnvironmentVariableTarget]::Process
+    )
+    $editorProcess = Start-Process `
+        -FilePath $editorCommand `
+        -ArgumentList $editorArguments `
+        -PassThru `
+        -WindowStyle Hidden
 
-if (-not $editorProcess.WaitForExit($TimeoutSeconds * 1000)) {
-    Stop-Process -Id $editorProcess.Id -Force -ErrorAction SilentlyContinue
-    throw "Physics World rope-bridge PIE validation timed out after $TimeoutSeconds seconds; see '$validationLog'."
+    if (-not $editorProcess.WaitForExit($TimeoutSeconds * 1000)) {
+        Stop-Process -Id $editorProcess.Id -Force -ErrorAction SilentlyContinue
+        throw "Physics World rope-bridge PIE validation timed out after $TimeoutSeconds seconds; see '$validationLog'."
+    }
+    $editorProcess.WaitForExit()
+    $exitCode = $editorProcess.ExitCode
 }
-$editorProcess.WaitForExit()
-$exitCode = $editorProcess.ExitCode
+finally {
+    [Environment]::SetEnvironmentVariable(
+        $mapEnvironmentName,
+        $previousMapEnvironment,
+        [EnvironmentVariableTarget]::Process
+    )
+}
 
 if (-not (Test-Path -LiteralPath $validationLog -PathType Leaf)) {
     throw "Physics World rope-bridge PIE validation did not create its log: '$validationLog'."

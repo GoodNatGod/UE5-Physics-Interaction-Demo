@@ -3,13 +3,13 @@
 > 文档状态：已落地 P0，不再是待实现方案
 > 更新日期：2026-08-09
 > 引擎：Unreal Engine 5.8
-> 体验定位：开放区域中的常驻落叶 / 垃圾纸片表现物理
+> 体验定位：开放区域中的两种常驻地表叶片表现物理
 
 ## 0. 先给结论
 
 当前系统已经实现：
 
-- 地面持续存在受控总量的落叶与纸片；
+- 地面持续存在受控总量的两种叶片；
 - 移动、攻击、起跳、落地和爆炸扰动同一套环境粒子；
 - 交互不会重新生成 Niagara System；
 - 已经落地的粒子仍可被下一次交互重新带动；
@@ -41,7 +41,7 @@
 
 ### 1.2 语义边界
 
-普通落叶和纸片是**视觉物理代理**：
+两种地表叶片是**视觉物理代理**：
 
 - 不提供阻挡；
 - 不承担伤害；
@@ -110,6 +110,19 @@ Content/PhysicsWorldDemo/LooseDebris/
 
 五个 System 都由生成器创建并保持资产引用有效，但当前运行时只激活 Ambient。Movement / Attack / Landing / Explosion System 是预留模板和未来对比资产；专项验收要求交互期间活动额外 System 数为 `0`。
 
+### 3.1 材质与第三方图集边界
+
+两个 Renderer 继续沿用 Leaf / Paper 内部命名，但可见外观都已经是叶片：
+
+| 内部资产 | 本地源图集 | UV Offset | UV Scale | 可见外观 |
+|---|---|---:|---:|---|
+| `M_LooseDebris_Leaf` | `T_Fol_HangingLeaves_BC` | `(410/2048, 1585/2048)` | `(100/2048, 100/2048)` | 单片叶子 |
+| `M_LooseDebris_Paper` | `T_Fol_Leafs_BC` | `(769/2048, 186/2048)` | `(216/2048, 216/2048)` | 五瓣浅色叶花 |
+
+材质使用图集 RGB 乘 Particle Color 作为 Base Color，图集 Alpha 乘 Particle Alpha 作为 Mask。第二行只替换原白色纸片的 Renderer 外观，碰撞、Point Force、生命周期和预算不变；`Paper*` 名称作为资产兼容层保留。
+
+两张图集来自本地合法的 `ModularLostRuinKit`，不随公开作品集仓库分发。公开仓库保留自制材质图、Niagara 资产和生成脚本以供结构审阅；没有对应商业包时会出现外部贴图缺失，不能把公开 clone 描述为完整美术复现。
+
 ## 4. Ambient Niagara 规格
 
 ### 4.1 System / Emitter
@@ -120,13 +133,13 @@ Content/PhysicsWorldDemo/LooseDebris/
 - World Space，`bLocalSpace=false`；
 - Dynamic Bounds，由 CPU 粒子的实际位置逐帧更新，避免世界空间粒子离开固定框后被视锥整批裁剪；
 - Sprite Renderer + Two Sided Masked 材质；
-- Leaf / Paper 使用独立 Spawn Rate、Rotation Strength 和 Drag User 参数；
+- Leaf / Paper 兼容通道使用独立 Spawn Rate、Rotation Strength 和 Drag User 参数；
 - Wind Force 模块在生成阶段显式禁用；
 - Ambient 每个 Emitter 有两个 V2 Point Attraction Force：通用释放力和 Attack 尾流力。
 
 #### 为什么从 Fixed Bounds 改为 Dynamic Bounds
 
-Ambient 是 World Space 常驻系统，粒子会被角色移动、刀路和爆炸持续带离初始区域。Fixed Bounds 只描述一块静态包围盒：即使粒子仍在模拟，只要该包围盒离开视锥，Renderer 就会把整套系统裁掉，表现为镜头轻微向下时所有叶片和纸片同时消失。
+Ambient 是 World Space 常驻系统，粒子会被角色移动、刀路和爆炸持续带离初始区域。Fixed Bounds 只描述一块静态包围盒：即使粒子仍在模拟，只要该包围盒离开视锥，Renderer 就会把整套系统裁掉，表现为镜头轻微向下时所有叶片同时消失。
 
 当前 CPU Emitter 由实际粒子位置逐帧更新 Dynamic Bounds；`Pitch=-45deg` 的纯 Ambient 与交互预览均保持可见。约 `450` 粒子的单 Region 只是当前 P0 取舍，尚未形成固定硬件成本结论；扩大到多 Region 或 GPU Sim 时必须重新评估 Bounds 策略，不能直接把单区域结论外推到大世界规模。
 
@@ -140,7 +153,7 @@ Ambient 不一次性生成 450 个永久粒子，而是按预算和寿命计算�
                = 15 粒子/秒（约）
 ```
 
-其中 Paper 比例当前为 `0.30`。粒子寿命带少量 `0.9~1.1` 随机范围，避免整批同时替换。这样区域内总体密度长期稳定，又能控制峰值和更新换代。
+其中第二叶片比例通过兼容字段 `PaperParticleFraction` 控制，当前为 `0.30`。粒子寿命带少量 `0.9~1.1` 随机范围，避免整批同时替换。这样区域内总体密度长期稳定，又能控制峰值和更新换代。
 
 ### 4.3 出生与地面
 
@@ -161,7 +174,7 @@ Ambient 关闭永久 Rest State，因为粒子落地后仍要响应下一次外�
 | `AmbientAerodynamicDrag` | `0.35` | 耗散线速度 |
 | `AmbientRotationalDrag` | `8.0` | 快速耗散角速度 |
 | `AmbientLeafRotationStrength` | `0.0` | 关闭落叶持续空气动力旋转 |
-| `AmbientPaperRotationStrength` | `0.0` | 关闭纸片持续空气动力旋转 |
+| `AmbientPaperRotationStrength` | `0.0` | 关闭第二叶片持续空气动力旋转（兼容命名） |
 | `AmbientRestingCalmingRate` | `12.0` | 清除接触后的微小抖动 |
 | `AmbientBouncingCalmingRate` | `12.0` | 清除碰撞阶段的残余能量 |
 | `AmbientRestitution` | `0.0` | 避免地面微弹持续喂给旋转求解 |
@@ -350,6 +363,7 @@ powershell -File Scripts/ConfigurePhysicsWorldLooseDebris.ps1
 脚本负责：
 
 - 创建 / 校验 Data Channel、Effect Type、材质、五个 Niagara System；
+- 从本地 `ModularLostRuinKit` foliage atlas 裁切两种叶片外观；源图集缺失时明确失败；
 - 确保 Ambient 每个 Emitter 都有两个 V2 Point Force；
 - 绑定所有 Runtime User 参数；
 - 绑定失败时返回失败，不再 `ensure` 后继续假成功；
@@ -361,8 +375,11 @@ powershell -File Scripts/ConfigurePhysicsWorldLooseDebris.ps1
 ## 9. 调试可视化
 
 ```text
-pw.LooseDebris.DrawFields 0/1
+pw.LooseDebris.DrawFields -1/0/1
+rover.combat.DrawAttackTrace -1/0/1
 ```
+
+三态含义统一为：`-1` 跟随 DataAsset，`0` 强制关闭，`1` 强制开启。游戏内 `Caps Lock` 同步切换两项可视化，只改变 Debug Draw，不关闭碰撞、伤害、字段发布、NDC 写入或粒子受力。若两个 CVar 被手工设成不同状态，第一次按键会先统一关闭。
 
 调试应检查：
 
@@ -371,11 +388,11 @@ pw.LooseDebris.DrawFields 0/1
 - Attack Capsule 是否沿刀身而不是角色胶囊；
 - Repulsion Force Origin 是否在地面下方且仍处于半径内；
 - Attack Wake Target 是否在刀路前上方；
-- Jump / Landing 是否只各发布一次；
+- Jump / Landing 来源是否出现，是否存在明显连续 spam；当前统计尚未按 SourceType 独立计数；
 - Explosion 是否为径向范围；
 - dropped / rejected / NDC write 计数是否符合预算。
 
-编辑器调试图形默认开启，Shipping 默认关闭。Debug Draw 解释输入场，不解释最终粒子状态。
+DataAsset 默认均可关闭绘制，开发时再用 CVar 或 `Caps Lock` 显式覆盖。Debug Draw 解释输入场，不解释最终粒子状态。
 
 ## 10. 自动化验收
 
@@ -392,7 +409,7 @@ Loose Debris 专项验证：
 2. 静止角色不发布 Movement Field；
 3. 移动字段发布且 Region 收到；
 4. 空挥 Attack 字段发布，方向尾流激活；
-5. 起跳和落地字段各触发一次；
+5. 观察到 Jump 和 Landing 来源进入 Region；当前不把阶段累计数解释为逐来源次数；
 6. Explosion 字段写入 NDC；
 7. Point Force 原点位于半径和 `0.8R` 偏移限制内；
 8. 每来源限流丢弃数正确；
@@ -405,11 +422,13 @@ Loose Debris 专项验证：
 
 ```text
 stationary_fields=0 movement_fields=1 attack_fields=2 attack_wake=1
-force_coverage=1 jump_fields=21 landing_fields=1 explosion_fields=1
-interaction_systems=0 ndc_writes=26 budget_drops=1
+force_coverage=1 jump_fields=28 landing_fields=1 explosion_fields=1
+interaction_systems=0 ndc_writes=33 budget_drops=1
 ground_projected=1 chaos_requests=0
 ambient_rotation=0.00/0.00@8.00 lifecycle=0.4s->15.0s
 ```
+
+`jump_fields=28` 是测试阶段累计发布数，包含该阶段内其他来源，并非 28 次 Jump。当前脚本没有按 `SourceType` 分桶，也没有用多组下坠速度验证 Landing 映射；文档只据此声明来源链已接通。
 
 无头 PIE 不渲染最终画面。Dynamic Bounds 资产已重建，另用 `Pitch=-45deg` 预览确认整套 System 不再随镜头俯仰消失；持续自转、材质穿帮、密度和尾流强弱仍需有渲染手感验收。
 
@@ -454,7 +473,7 @@ ambient_rotation=0.00/0.00@8.00 lifecycle=0.4s->15.0s
 - Ambient 通过持续耗散实现视觉静止，不是显式 Grounded / Airborne / Settling 状态机；
 - 当前地面投影由 CPU Trace 确定交互中心，粒子自身碰撞仍需复杂地形视觉检查；
 - 当前仅验证单 Region 的 CPU Dynamic Bounds；多层建筑、跨 Cell、远离世界原点与多 Region 重叠仍未验证；
-- 当前材质与叶片 / 纸片 Sprite 轮廓为功能质量，不作为最终美术成果；
+- 当前两种叶片 Sprite 轮廓为功能质量，不作为最终美术成果；源 foliage atlas 不在公开仓库；
 - 性能预算和质量档位还没有固化成 Effect Type 的正式平台配置。
 
 ## 14. 关键文件

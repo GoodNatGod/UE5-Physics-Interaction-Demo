@@ -189,6 +189,7 @@ private:
 	int32 ResolveActiveTraceSampleCount(const FRoverAttackDefinition& Definition) const;
 	float ResolveActiveTraceSubstepDistance(const FRoverAttackDefinition& Definition) const;
 	int32 ResolveActiveMaxTraceSubsteps(const FRoverAttackDefinition& Definition) const;
+	bool ShouldDrawAttackTrace() const;
 
 	UPROPERTY(Transient)
 	TObjectPtr<ARoverCharacter> CharacterOwner;

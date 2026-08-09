@@ -10,6 +10,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "HAL/IConsoleManager.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "InputCoreTypes.h"
@@ -22,6 +23,32 @@
 #include "RoverLocomotionComponent.h"
 #include "RoverWorldSkillComponent.h"
 #include "UObject/ConstructorHelpers.h"
+#include "WorldInteractionSubsystem.h"
+
+namespace
+{
+constexpr TCHAR AttackTraceVisualizationCVar[] = TEXT("rover.combat.DrawAttackTrace");
+constexpr TCHAR LooseDebrisVisualizationCVar[] = TEXT("pw.LooseDebris.DrawFields");
+
+bool ResolveVisualizationCVar(const TCHAR* Name, const bool bConfigFallback)
+{
+	const IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name);
+	if (!Variable)
+	{
+		return bConfigFallback;
+	}
+	const int32 ConsoleOverride = Variable->GetInt();
+	return ConsoleOverride >= 0 ? ConsoleOverride != 0 : bConfigFallback;
+}
+
+void SetVisualizationCVar(const TCHAR* Name, const bool bEnabled)
+{
+	if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
+	{
+		Variable->Set(bEnabled ? 1 : 0, ECVF_SetByConsole);
+	}
+}
+}
 
 ARoverCharacter::ARoverCharacter()
 {
@@ -319,6 +346,14 @@ void ARoverCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	{
 		EnhancedInput->BindAction(FireballAction, ETriggerEvent::Started, this, &ARoverCharacter::HandleFireballStarted);
 	}
+	if (DebugVisualizationAction)
+	{
+		EnhancedInput->BindAction(
+			DebugVisualizationAction,
+			ETriggerEvent::Started,
+			this,
+			&ARoverCharacter::HandleDebugVisualizationToggle);
+	}
 
 	AddInputMappingContexts();
 }
@@ -381,6 +416,14 @@ void ARoverCharacter::EnsureRuntimeInputObjects()
 		FireballAction = NewObject<UInputAction>(this, TEXT("IA_RuntimeFireball"), RF_Transient);
 		FireballAction->ValueType = EInputActionValueType::Boolean;
 	}
+	if (!DebugVisualizationAction)
+	{
+		DebugVisualizationAction = NewObject<UInputAction>(
+			this,
+			TEXT("IA_RuntimeDebugVisualization"),
+			RF_Transient);
+		DebugVisualizationAction->ValueType = EInputActionValueType::Boolean;
+	}
 	if (!RuntimeMappingContext)
 	{
 		RuntimeMappingContext = NewObject<UInputMappingContext>(this, TEXT("IMC_RuntimeRover"), RF_Transient);
@@ -392,6 +435,7 @@ void ARoverCharacter::EnsureRuntimeInputObjects()
 		RuntimeMappingContext->MapKey(AttackAction, EKeys::Gamepad_FaceButton_Bottom);
 		RuntimeMappingContext->MapKey(FireballAction, EKeys::Q);
 		RuntimeMappingContext->MapKey(FireballAction, EKeys::Gamepad_RightShoulder);
+		RuntimeMappingContext->MapKey(DebugVisualizationAction, EKeys::CapsLock);
 	}
 }
 
@@ -501,6 +545,45 @@ bool ARoverCharacter::HasActiveInputMappings() const
 	return HasRequiredMapping(DefaultMappingContext) &&
 		HasRequiredMapping(MouseLookMappingContext) &&
 		HasRequiredMapping(RuntimeMappingContext);
+}
+
+bool ARoverCharacter::IsInteractionDebugVisualizationEnabled() const
+{
+	const bool bAttackTraceConfigEnabled =
+		CombatComponent && CombatComponent->GetSettings().bDrawAttackTrace;
+	bool bLooseDebrisConfigEnabled = false;
+	if (const UWorld* World = GetWorld())
+	{
+		if (const UWorldInteractionSubsystem* Subsystem =
+			World->GetSubsystem<UWorldInteractionSubsystem>())
+		{
+			bLooseDebrisConfigEnabled = Subsystem->GetLooseDebrisSettings().bDrawDebugFields;
+		}
+	}
+
+	return ResolveVisualizationCVar(
+		AttackTraceVisualizationCVar,
+		bAttackTraceConfigEnabled) ||
+		ResolveVisualizationCVar(
+			LooseDebrisVisualizationCVar,
+			bLooseDebrisConfigEnabled);
+}
+
+void ARoverCharacter::ToggleInteractionDebugVisualization()
+{
+	const bool bEnable = !IsInteractionDebugVisualizationEnabled();
+	SetVisualizationCVar(AttackTraceVisualizationCVar, bEnable);
+	SetVisualizationCVar(LooseDebrisVisualizationCVar, bEnable);
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("Interaction debug visualization: %s"),
+		bEnable ? TEXT("ON") : TEXT("OFF"));
+}
+
+void ARoverCharacter::HandleDebugVisualizationToggle()
+{
+	ToggleInteractionDebugVisualization();
 }
 
 void ARoverCharacter::HandleMove(const FInputActionValue& Value)

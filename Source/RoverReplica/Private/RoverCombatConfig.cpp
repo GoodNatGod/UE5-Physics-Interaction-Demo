@@ -93,8 +93,8 @@ FRoverCombatSettings::FRoverCombatSettings()
 	HeavyResonanceDefinition.Montage = FSoftObjectPath(TEXT("/Game/Rover/Combat/Montages/AM_Rover_Attack_EX01.AM_Rover_Attack_EX01"));
 	HeavyResonanceDefinition.WeaponHand = ERoverWeaponHand::Right;
 	HeavyResonanceDefinition.AnimPlayRate = 1.2f; // [PLACEHOLDER]
-	HeavyResonanceDefinition.MontageBlendOutTime = 0.15f; // [PLACEHOLDER]
-	HeavyResonanceDefinition.MontageBlendOutTriggerTime = 0.15f; // [PLACEHOLDER]
+	HeavyResonanceDefinition.MontageBlendOutTime = 0.25f; // [PLACEHOLDER]
+	HeavyResonanceDefinition.MontageBlendOutTriggerTime = 0.25f; // [PLACEHOLDER]
 	HeavyResonanceDefinition.Damage = 55.0f; // [PLACEHOLDER]
 	HeavyResonanceDefinition.PoiseDamage = 45.0f; // [PLACEHOLDER]
 	HeavyResonanceDefinition.EnvironmentImpulseStrength = 1100.0f; // [PLACEHOLDER]

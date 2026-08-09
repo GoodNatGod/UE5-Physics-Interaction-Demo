@@ -67,6 +67,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Rover|Input")
 	bool HasActiveInputMappings() const;
 
+	// Caps Lock toggles the runtime visualization without changing interaction behavior.
+	UFUNCTION(BlueprintCallable, Category = "Rover|Debug")
+	void ToggleInteractionDebugVisualization();
+
+	UFUNCTION(BlueprintPure, Category = "Rover|Debug")
+	bool IsInteractionDebugVisualizationEnabled() const;
+
 	UFUNCTION(BlueprintCallable, Category = "Rover|Combat")
 	void ReceiveCombatHit(const FRoverCombatHit& Hit);
 
@@ -174,6 +181,9 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rover|Input")
 	TObjectPtr<UInputAction> FireballAction;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> DebugVisualizationAction;
+
 private:
 	void EnsureRuntimeInputObjects();
 	void AddInputMappingContexts();
@@ -190,6 +200,7 @@ private:
 	void HandleAttackStarted();
 	void HandleAttackCompleted();
 	void HandleFireballStarted();
+	void HandleDebugVisualizationToggle();
 	void ConfigureCombatWeapon();
 	void UpdateCamera(float DeltaSeconds);
 	void CancelCameraAutoFollow();

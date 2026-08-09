@@ -17,7 +17,20 @@ SYSTEM_PATHS = {
     "explosion_effect": f"{SYSTEM_DIRECTORY}/NS_LooseDebris_Explosion",
 }
 MATERIAL_DIRECTORY = f"{ROOT}/Materials"
-DEFAULT_MAP_PATH = "/Game/ThirdPerson/Lvl_ThirdPerson"
+FOLIAGE_PRIMARY_LEAF_TEXTURE_PATH = (
+    "/Game/ModularLostRuinKit/Textures/Nature/Foliage/"
+    "T_Fol_HangingLeaves_BC"
+)
+# A single isolated leaf in the foliage atlas, authored at 2048 x 2048.
+FOLIAGE_PRIMARY_LEAF_UV_SCALE = (100.0 / 2048.0, 100.0 / 2048.0)
+FOLIAGE_PRIMARY_LEAF_UV_OFFSET = (410.0 / 2048.0, 1585.0 / 2048.0)
+FOLIAGE_FLOWER_LEAF_TEXTURE_PATH = (
+    "/Game/ModularLostRuinKit/Textures/Nature/Foliage/T_Fol_Leafs_BC"
+)
+# User-selected five-petal flower leaf. The square crop excludes adjacent branches.
+FOLIAGE_FLOWER_LEAF_UV_SCALE = (216.0 / 2048.0, 216.0 / 2048.0)
+FOLIAGE_FLOWER_LEAF_UV_OFFSET = (769.0 / 2048.0, 186.0 / 2048.0)
+DEFAULT_MAP_PATH = "/Game/PhysicsWorldDemo/Maps/L_PhysicsWorldDemo_Lumen"
 REGION_TAG = "PhysicsWorldLooseDebrisRegion"
 CURRENT_CONFIG_SCHEMA_VERSION = 1
 
@@ -44,7 +57,13 @@ def create_constant2(material, x_value, y_value, x, y):
     return expression
 
 
-def ensure_debris_material(asset_name: str, leaf_mask: bool):
+def ensure_debris_material(
+    asset_name: str,
+    texture_path: str,
+    uv_scale_value,
+    uv_offset_value,
+    roughness_value: float,
+):
     asset_path = f"{MATERIAL_DIRECTORY}/{asset_name}"
     material = unreal.load_asset(asset_path)
     if material and not isinstance(material, unreal.Material):
@@ -66,77 +85,75 @@ def ensure_debris_material(asset_name: str, leaf_mask: bool):
     particle_color = unreal.MaterialEditingLibrary.create_material_expression(
         material, unreal.MaterialExpressionParticleColor, -700, -100
     )
-    unreal.MaterialEditingLibrary.connect_material_property(
-        particle_color, "RGB", unreal.MaterialProperty.MP_BASE_COLOR
-    )
-    roughness = create_constant(material, 0.88 if leaf_mask else 0.82, -300, 120)
+    roughness = create_constant(material, roughness_value, -300, 120)
     unreal.MaterialEditingLibrary.connect_material_property(
         roughness, "", unreal.MaterialProperty.MP_ROUGHNESS
     )
 
-    if leaf_mask:
-        texcoord = unreal.MaterialEditingLibrary.create_material_expression(
-            material, unreal.MaterialExpressionTextureCoordinate, -900, 140
-        )
-        center = create_constant2(material, 0.5, 0.5, -900, 260)
-        subtract = unreal.MaterialEditingLibrary.create_material_expression(
-            material, unreal.MaterialExpressionSubtract, -700, 200
-        )
-        unreal.MaterialEditingLibrary.connect_material_expressions(
-            texcoord, "", subtract, "A"
-        )
-        unreal.MaterialEditingLibrary.connect_material_expressions(
-            center, "", subtract, "B"
-        )
-        absolute = unreal.MaterialEditingLibrary.create_material_expression(
-            material, unreal.MaterialExpressionAbs, -540, 200
-        )
-        unreal.MaterialEditingLibrary.connect_material_expressions(
-            subtract, "", absolute, ""
-        )
-        scale = create_constant2(material, 1.05, 1.65, -540, 320)
-        multiply = unreal.MaterialEditingLibrary.create_material_expression(
-            material, unreal.MaterialExpressionMultiply, -370, 200
-        )
-        unreal.MaterialEditingLibrary.connect_material_expressions(
-            absolute, "", multiply, "A"
-        )
-        unreal.MaterialEditingLibrary.connect_material_expressions(
-            scale, "", multiply, "B"
-        )
-        mask_r = unreal.MaterialEditingLibrary.create_material_expression(
-            material, unreal.MaterialExpressionComponentMask, -200, 170
-        )
-        mask_r.set_editor_property("r", True)
-        mask_g = unreal.MaterialEditingLibrary.create_material_expression(
-            material, unreal.MaterialExpressionComponentMask, -200, 260
-        )
-        mask_g.set_editor_property("g", True)
-        unreal.MaterialEditingLibrary.connect_material_expressions(
-            multiply, "", mask_r, ""
-        )
-        unreal.MaterialEditingLibrary.connect_material_expressions(
-            multiply, "", mask_g, ""
-        )
-        add = unreal.MaterialEditingLibrary.create_material_expression(
-            material, unreal.MaterialExpressionAdd, -40, 210
-        )
-        unreal.MaterialEditingLibrary.connect_material_expressions(mask_r, "", add, "A")
-        unreal.MaterialEditingLibrary.connect_material_expressions(mask_g, "", add, "B")
-        one_minus = unreal.MaterialEditingLibrary.create_material_expression(
-            material, unreal.MaterialExpressionOneMinus, 120, 210
-        )
-        unreal.MaterialEditingLibrary.connect_material_expressions(
-            add, "", one_minus, ""
-        )
-        unreal.MaterialEditingLibrary.connect_material_property(
-            one_minus, "", unreal.MaterialProperty.MP_OPACITY_MASK
-        )
-    else:
-        opacity = create_constant(material, 1.0, -300, 240)
-        unreal.MaterialEditingLibrary.connect_material_property(
-            opacity, "", unreal.MaterialProperty.MP_OPACITY_MASK
-        )
+    foliage_texture = unreal.load_asset(texture_path)
+    if not isinstance(foliage_texture, unreal.Texture2D):
+        raise RuntimeError(f"Missing ModularLostRuinKit foliage texture: {texture_path}")
+    texcoord = unreal.MaterialEditingLibrary.create_material_expression(
+        material, unreal.MaterialExpressionTextureCoordinate, -1100, 160
+    )
+    uv_scale = create_constant2(
+        material, uv_scale_value[0], uv_scale_value[1], -1100, 280
+    )
+    scaled_uv = unreal.MaterialEditingLibrary.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -900, 180
+    )
+    unreal.MaterialEditingLibrary.connect_material_expressions(
+        texcoord, "", scaled_uv, "A"
+    )
+    unreal.MaterialEditingLibrary.connect_material_expressions(
+        uv_scale, "", scaled_uv, "B"
+    )
+    uv_offset = create_constant2(
+        material, uv_offset_value[0], uv_offset_value[1], -900, 300
+    )
+    atlas_uv = unreal.MaterialEditingLibrary.create_material_expression(
+        material, unreal.MaterialExpressionAdd, -700, 180
+    )
+    unreal.MaterialEditingLibrary.connect_material_expressions(
+        scaled_uv, "", atlas_uv, "A"
+    )
+    unreal.MaterialEditingLibrary.connect_material_expressions(
+        uv_offset, "", atlas_uv, "B"
+    )
+    foliage_sample = unreal.MaterialEditingLibrary.create_material_expression(
+        material, unreal.MaterialExpressionTextureSample, -500, 160
+    )
+    foliage_sample.set_editor_property("texture", foliage_texture)
+    foliage_sample.set_editor_property(
+        "sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_COLOR
+    )
+    unreal.MaterialEditingLibrary.connect_material_expressions(
+        atlas_uv, "", foliage_sample, "UVs"
+    )
+    tinted_color = unreal.MaterialEditingLibrary.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -260, -80
+    )
+    unreal.MaterialEditingLibrary.connect_material_expressions(
+        foliage_sample, "RGB", tinted_color, "A"
+    )
+    unreal.MaterialEditingLibrary.connect_material_expressions(
+        particle_color, "RGB", tinted_color, "B"
+    )
+    unreal.MaterialEditingLibrary.connect_material_property(
+        tinted_color, "", unreal.MaterialProperty.MP_BASE_COLOR
+    )
+    opacity = unreal.MaterialEditingLibrary.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -260, 220
+    )
+    unreal.MaterialEditingLibrary.connect_material_expressions(
+        foliage_sample, "A", opacity, "A"
+    )
+    unreal.MaterialEditingLibrary.connect_material_expressions(
+        particle_color, "A", opacity, "B"
+    )
+    unreal.MaterialEditingLibrary.connect_material_property(
+        opacity, "", unreal.MaterialProperty.MP_OPACITY_MASK
+    )
 
     unreal.MaterialEditingLibrary.set_base_material_usage(
         material, unreal.MaterialUsage.MATUSAGE_NIAGARA_SPRITES, True
@@ -279,7 +296,10 @@ def ensure_region_actor(config, generated_class):
     actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     actors = actor_subsystem.get_all_level_actors()
     regions = [
-        actor for actor in actors if actor and actor.actor_has_tag(REGION_TAG)
+        actor
+        for actor in actors
+        if actor
+        and (actor.actor_has_tag(REGION_TAG) or actor.get_class() == generated_class)
     ]
     if len(regions) > 1:
         paths = ", ".join(actor.get_path_name() for actor in regions)
@@ -306,11 +326,12 @@ def ensure_region_actor(config, generated_class):
         )
         if not region:
             raise RuntimeError(f"Failed to place {BLUEPRINT_NAME}")
-        tags = list(region.get_editor_property("tags"))
-        region_tag = unreal.Name(REGION_TAG)
-        if region_tag not in tags:
-            tags.append(region_tag)
-            region.set_editor_property("tags", tags)
+
+    tags = list(region.get_editor_property("tags"))
+    region_tag = unreal.Name(REGION_TAG)
+    if region_tag not in tags:
+        tags.append(region_tag)
+        region.set_editor_property("tags", tags)
 
     region.set_editor_property("loose_debris_config", config)
     region.set_actor_label("Physics World Loose Debris Region")
@@ -332,8 +353,20 @@ def main() -> None:
     ]:
         ensure_directory(directory)
 
-    ensure_debris_material("M_LooseDebris_Leaf", True)
-    ensure_debris_material("M_LooseDebris_Paper", False)
+    ensure_debris_material(
+        "M_LooseDebris_Leaf",
+        FOLIAGE_PRIMARY_LEAF_TEXTURE_PATH,
+        FOLIAGE_PRIMARY_LEAF_UV_SCALE,
+        FOLIAGE_PRIMARY_LEAF_UV_OFFSET,
+        0.88,
+    )
+    ensure_debris_material(
+        "M_LooseDebris_Paper",
+        FOLIAGE_FLOWER_LEAF_TEXTURE_PATH,
+        FOLIAGE_FLOWER_LEAF_UV_SCALE,
+        FOLIAGE_FLOWER_LEAF_UV_OFFSET,
+        0.88,
+    )
     data_channel, systems = ensure_generated_niagara_assets()
     config = ensure_config(data_channel, systems)
     blueprint, generated_class = ensure_region_blueprint()

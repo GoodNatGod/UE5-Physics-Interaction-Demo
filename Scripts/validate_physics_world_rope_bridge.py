@@ -1,4 +1,5 @@
 import math
+import os
 import time
 
 import unreal
@@ -7,6 +8,9 @@ import unreal
 BRIDGE_TAG = "PhysicsWorldRopeBridge"
 BRIDGE_BLUEPRINT_CLASS = (
     "/Game/PhysicsWorldDemo/Blueprints/BP_RopeBridge.BP_RopeBridge_C"
+)
+WORLD_INTERACTION_CONFIG_PATH = (
+    "/Game/PhysicsWorldDemo/Config/DA_WorldInteractionConfig"
 )
 SECONDARY_ANCHOR_TAG = "RopeBridgeSecondaryAnchor"
 INTERNAL_NEGATIVE_Y_TAG = "RopeBridgeInternalNegativeY"
@@ -67,6 +71,10 @@ PHASE_TIMEOUT_SECONDS = 20.0
 STOP_TIMEOUT_SECONDS = 15.0
 SUCCESS_MARKER = "PHYSICS_WORLD_ROPE_BRIDGE_PIE_OK"
 FAILURE_MARKER = "PHYSICS_WORLD_ROPE_BRIDGE_PIE_FAIL"
+VALIDATION_MAP_PATH = os.environ.get(
+    "ROVER_ROPE_BRIDGE_VALIDATION_MAP",
+    "/Game/ThirdPerson/Lvl_ThirdPerson",
+)
 
 
 level_editor = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -775,7 +783,53 @@ def begin_validation(world):
         fail(f"tagged actor class={bridge.get_class().get_name()} expected=BP_RopeBridge_C")
         return
 
+    shared_config = unreal.load_asset(WORLD_INTERACTION_CONFIG_PATH)
+    default_object = (
+        unreal.get_default_object(expected_class) if expected_class else None
+    )
+    if not isinstance(shared_config, unreal.WorldInteractionConfig):
+        fail(f"missing shared config: {WORLD_INTERACTION_CONFIG_PATH}")
+        return
+    if not isinstance(default_object, unreal.WorldRopeBridge):
+        fail("BP_RopeBridge default object is unavailable")
+        return
+    for context, owner in (("actor", bridge), ("blueprint_cdo", default_object)):
+        if bool(owner.get_editor_property("override_shared_settings")):
+            fail(f"{context} still enables Override Shared Settings")
+            return
+        assigned_config = owner.get_editor_property("interaction_config")
+        if (
+            not isinstance(assigned_config, unreal.WorldInteractionConfig)
+            or assigned_config.get_path_name() != shared_config.get_path_name()
+        ):
+            assigned_path = (
+                assigned_config.get_path_name() if assigned_config else "none"
+            )
+            fail(
+                f"{context} interaction_config={assigned_path} "
+                f"expected={shared_config.get_path_name()}"
+            )
+            return
+
+    shared_settings = shared_config.get_editor_property(
+        "settings"
+    ).get_editor_property("rope_bridge")
     settings = bridge.get_resolved_bridge_settings()
+    if settings.to_tuple() != shared_settings.to_tuple():
+        fail(
+            "actor resolved settings differ from DA_WorldInteractionConfig: "
+            f"resolved={settings.export_text()} "
+            f"shared={shared_settings.export_text()}"
+        )
+        return
+    blueprint_settings = default_object.get_resolved_bridge_settings()
+    if blueprint_settings.to_tuple() != shared_settings.to_tuple():
+        fail(
+            "BP_RopeBridge defaults do not resolve from DA_WorldInteractionConfig: "
+            f"resolved={blueprint_settings.export_text()} "
+            f"shared={shared_settings.export_text()}"
+        )
+        return
     expected_planks = int(settings.get_editor_property("plank_count"))
     expected_constraints = (expected_planks - 1) * 2 + 4
     if expected_planks < MIN_PLANK_COUNT:
@@ -2307,6 +2361,10 @@ def on_tick(_delta_seconds):
     except Exception as exc:
         fail(f"exception={exc!r}; phase={state['phase']} last={state['last']}")
 
+
+editor_world = unreal.EditorLoadingAndSavingUtils.load_map(VALIDATION_MAP_PATH)
+if not editor_world:
+    raise RuntimeError(f"Failed to load rope-bridge validation map: {VALIDATION_MAP_PATH}")
 
 unreal.EditorPythonScripting.set_keep_python_script_alive(True)
 tick_handle = unreal.register_slate_post_tick_callback(on_tick)

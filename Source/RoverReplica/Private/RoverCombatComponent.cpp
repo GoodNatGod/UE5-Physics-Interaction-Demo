@@ -27,19 +27,13 @@ FTransform BlendThrowTransform(const FTransform& Start, const FTransform& End, c
 }
 }
 
-// Debug visualization CVars.
+// Debug visualization CVars. A negative override follows the CombatConfig setting.
 // rover.combat.DrawAttackTrace 1 -> show the actual sphere sweeps.
 // rover.combat.DrawHitReaction 1 -> show hit impact flash and direction.
-#if WITH_EDITOR
-static constexpr int32 DefaultDrawAttackTrace = 1;
-#else
-static constexpr int32 DefaultDrawAttackTrace = 0;
-#endif
-
 static TAutoConsoleVariable<int32> CVarDrawAttackTrace(
 	TEXT("rover.combat.DrawAttackTrace"),
-	DefaultDrawAttackTrace,
-	TEXT("0=Off  1=Show every weapon sphere sweep capsule during the Active phase."),
+	-1,
+	TEXT("-1=Use CombatConfig  0=Force off  1=Force on for every weapon sphere sweep."),
 	ECVF_Cheat);
 
 static TAutoConsoleVariable<float> CVarDrawAttackTraceDuration(
@@ -1493,7 +1487,7 @@ void URoverCombatComponent::UpdateThirdAttackWeaponThrow(const float DeltaTime)
 	}
 
 	if (ThirdAttackThrowPhase != ERoverThirdAttackThrowPhase::Inactive &&
-		CVarDrawAttackTrace.GetValueOnGameThread())
+		ShouldDrawAttackTrace())
 	{
 		if (const FRoverAttackDefinition* Definition = GetAttackDefinition(CurrentComboIndex))
 		{
@@ -1695,7 +1689,7 @@ void URoverCombatComponent::PerformWeaponTrace()
 		ProcessTraceSegment(StepCurrentBase, StepCurrentTip, FrameImpactDirection);
 	}
 
-	if (CVarDrawAttackTrace.GetValueOnGameThread())
+	if (ShouldDrawAttackTrace())
 	{
 		const float Duration = FMath::Max(0.01f, CVarDrawAttackTraceDuration.GetValueOnGameThread());
 		const float Radius = ResolveActiveTraceRadius(*Definition);
@@ -1734,7 +1728,7 @@ void URoverCombatComponent::ProcessTraceSegment(
 		FCollisionShape::MakeSphere(ResolveActiveTraceRadius(*Definition)),
 		QueryParams);
 
-	if (CVarDrawAttackTrace.GetValueOnGameThread())
+	if (ShouldDrawAttackTrace())
 	{
 		const float Duration = FMath::Max(0.01f, CVarDrawAttackTraceDuration.GetValueOnGameThread());
 		const float Radius = ResolveActiveTraceRadius(*Definition);
@@ -1772,7 +1766,7 @@ void URoverCombatComponent::ProcessTraceSegment(
 		HitActorsThisAttack.Add(HitActor);
 
 		// Debug: flash the hit impact point.
-		if (CVarDrawAttackTrace.GetValueOnGameThread())
+		if (ShouldDrawAttackTrace())
 		{
 			DrawDebugSphere(GetWorld(), Hit.ImpactPoint, 15.0f, 6, FColor::Red, false, 0.3f, 0, 3.0f);
 			DrawDebugString(GetWorld(), Hit.ImpactPoint + FVector(0, 0, 30),
@@ -1809,4 +1803,12 @@ void URoverCombatComponent::ProcessTraceSegment(
 			InteractionSubsystem->SubmitWorldInteraction(Request);
 		}
 	}
+}
+
+bool URoverCombatComponent::ShouldDrawAttackTrace() const
+{
+	const int32 ConsoleOverride = CVarDrawAttackTrace.GetValueOnGameThread();
+	return ConsoleOverride >= 0
+		? ConsoleOverride != 0
+		: GetSettings().bDrawAttackTrace;
 }

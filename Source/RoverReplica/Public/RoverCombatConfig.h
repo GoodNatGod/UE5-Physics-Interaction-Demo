@@ -225,6 +225,10 @@ struct ROVERREPLICA_API FRoverCombatSettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "HitReaction|Watchdog", meta = (ClampMin = "0.1"))
 	float HitReactionTimeout = 2.0f;
 
+	// Draws only the weapon trace visualization. Collision queries and damage remain active when disabled.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Debug")
+	bool bDrawAttackTrace = false;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Animation")
 	TSoftObjectPtr<UAnimMontage> LightHitLeftMontage;
 
