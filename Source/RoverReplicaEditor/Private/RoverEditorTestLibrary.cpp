@@ -937,11 +937,10 @@ bool ConfigureLooseDebrisNiagaraSystem(
 		// stay where they were emitted instead of being dragged with the component.
 		Data->bLocalSpace = false;
 		Data->SimTarget = ENiagaraSimTarget::CPUSim;
-		Data->CalculateBoundsMode = ENiagaraEmitterCalculateBoundMode::Fixed;
-		const float BoundsRadius = bAmbient ? 1800.0f : 1200.0f;
-		Data->FixedBounds = FBox(
-			FVector(-BoundsRadius, -BoundsRadius, -500.0f),
-			FVector(BoundsRadius, BoundsRadius, bAmbient ? 900.0f : 1400.0f));
+		// These CPU particles remain in world space and can be pushed beyond their
+		// authored spawn area. Dynamic bounds prevent the whole emitter from being
+		// frustum-culled when the camera no longer sees the original fixed box.
+		Data->CalculateBoundsMode = ENiagaraEmitterCalculateBoundMode::Dynamic;
 		Data->MaxGPUParticlesSpawnPerFrame = bAmbient ? 256 : 128;
 
 		SetRapidIterationValue(

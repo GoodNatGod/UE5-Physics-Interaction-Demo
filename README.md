@@ -8,7 +8,7 @@
 |---|---|
 | 作品集方向 | 大世界交互策划 / 技术美术（物理方向） |
 | 当前场景 | 营地交互垂直切片 |
-| 核心案例 | 常驻地表杂物、可破坏木箱、范围爆炸、60 板动态吊桥 |
+| 核心案例 | 常驻地表杂物（刀路尾流 / 动态边界）、一刀破箱 / 范围爆炸、保留攻击位移的 60 板动态吊桥 |
 | 我的职责 | 体验规则、反馈分级、参数体系、UE 原型实现、调试与验收 |
 | 技术基线 | Chaos、Geometry Collection、Niagara、Physical Material、Physics Constraint、Editor Scripting、无头 PIE |
 
@@ -38,7 +38,7 @@
 | 攻击扫过落叶 | 贴地粒子先被掀起，再沿挥砍方向形成短尾流 | 攻击是定向切割，不是圆形爆炸 |
 | 近战命中木箱 | 第一刀立即破裂，碎片继承方向并受质量、阻尼和重力约束 | 武器确实接触了物体 |
 | 发射火球 | 范围内多个木箱分别响应，叠加爆炸、木屑和灼烧痕迹 | 同一协议可以从单点升级为范围事件 |
-| 站上 / 经过吊桥 | 桥面承重、下沉、晃动；离开后衰减并恢复自然弧线 | 动态路径能够承载玩家而不是只做摆动 |
+| 站上 / 经过 / 桥上攻击 | 桥面承重、下沉、晃动；攻击保持前移但明显弱于落地；离开后恢复自然弧线 | 动态路径能区分持续载荷、战斗推进和垂直冲击 |
 | 打开调试可视化 | 显示武器 Sweep 与轻量交互场的位置、方向和半径 | 反馈结果可以解释和手调 |
 
 ## 我的工作方式：先定义环境语言，再选择技术
@@ -63,13 +63,13 @@ flowchart LR
     H --> I["动态吊桥"]
 ```
 
-## 案例一：常驻地表轻质杂物
+## 案例一：常驻、可反复交互的地表轻质杂物
 
 ### 体验定义
 
 落叶和纸片属于场景，而不是角色技能的附属粒子。区域内保持约 `450` 个 Ambient 粒子的稳态预算，单粒子寿命约 `30s` 并持续轮换。移动、攻击、起跳、落地和爆炸只改变当时已经存在的粒子，不为每次交互重新生成 Niagara System。
 
-当前 P0 使用 CPU Sim Ambient System，目的是先证明交互规则、碰撞沉降、贴地再激活和调参链路。Niagara Data Channel 已建立并写入，但当前 Region 主要通过 Subsystem 委托和 User 参数驱动 Ambient；GPU / Islands 扩量需要在相同场景下做 A/B 性能测试后再决定。
+当前 P0 使用 CPU Sim Ambient System 和 Dynamic Bounds，目的是先证明交互规则、碰撞沉降、贴地再激活、镜头裁剪稳定性和调参链路。Niagara Data Channel 已建立并写入，但当前 Region 主要通过 Subsystem 委托和 User 参数驱动 Ambient；GPU / Islands 扩量需要在相同场景下做 A/B 性能测试后再决定。
 
 ### 攻击为什么不是单一排斥力
 
@@ -83,6 +83,12 @@ flowchart LR
 ### 怎样让它停下来，又能再次被影响
 
 Ambient 粒子不能永久进入不可唤醒的 Rest State，否则落地后下一刀无法再带动。当前源码与已重建的 Schema 资产把持续旋转驱动力设为 `0/0`、旋转阻尼设为 `8`、碰撞 Restitution 设为 `0`、Resting / Bouncing Calming Rate 设为 `12`；无头 PIE 已确认运行时读取 `0/0@8`。目标是在保留下一次 Point Force 响应的同时耗散持续自转；最终是否自然仍以有渲染 PIE 为观感出口，不能仅凭参数断言画面已经通过。
+
+### 镜头向下时为什么曾整片消失
+
+粒子生命周期、持续生成和碰撞都没有中断，但镜头轻微向下时整片落叶会同时不可见。根因不是数量不足，而是世界空间粒子继续移动后超出 Niagara 的 Fixed Bounds；固定包围盒离开视锥时，Renderer 会把整套 System 一起裁掉。
+
+当前 Leaf / Paper Emitter 改为 CPU Dynamic Bounds，由实际粒子位置逐帧更新包围范围。`Pitch=-45deg` 下的纯 Ambient 与交互预览均保持可见；约 `450` 粒子的单 Region 只是当前 P0 取舍，正式 CPU Bounds 成本仍待固定硬件测量。该修复解决的是“整片同时消失”，不把个别 Sprite 贴地变薄或闪烁混成同一个问题。
 
 完整设计、参数和失败复盘见 [2026-08-09 交互设计日志](./Docs/InteractionDesignLog-2026-08-09.zh-CN.md) 与 [Niagara 地表轻质杂物交互系统说明](./Docs/Niagara地表轻质杂物交互系统方案.md)。
 
@@ -120,7 +126,7 @@ rover.combat.DrawAttackTraceDuration <秒>
 
 近战强调时机与方向，火球强调范围和同时响应。二者共享环境协议，不为每个技能复制一套木箱逻辑。
 
-## 案例四：60 板动态吊桥
+## 案例四：保留攻击位移的 60 板动态吊桥
 
 吊桥被定义为开放区域中的动态通行节点。已记录的演示实例桥面约 `16.77m x 4.00m`，由 `60` 块独立物理木板、`4` 个端点挂点和 `122` 个约束组成；最新结构专项再次确认板数、挂点与约束数，但没有把尺寸作为该轮输出项。
 
@@ -154,6 +160,7 @@ rover.combat.DrawAttackTraceDuration <秒>
 | 攻击只有圆形排斥 | 缺少沿刀路的方向目标 | 增加独立前上方吸引尾流 |
 | 爆炸参数变强却覆盖不到粒子 | 力源偏移到了自身半径外 | Point Force 原点限制在 `0.8R` 内 |
 | 落叶一直转圈 | 持续旋转驱动、角阻尼不足、碰撞微能量 | 已完成 Rotation `0/0`、Rotational Drag `8`、Restitution `0` 的源码与迁移逻辑，待有渲染验收 |
+| 镜头向下时整片杂物消失 | 世界空间粒子超出 Fixed Bounds 后整套 Renderer 被视锥裁剪 | CPU Emitter 改为 Dynamic Bounds，并用 `Pitch=-45deg` 预览确认仍可见 |
 | 桥上普通攻击接近落地强度 | 推进载荷、桥板直击和通用环境冲量共用物理路径 | 拆分推进 / DirectHit / 通用冲量 / Explosion，并增加桥侧战斗阻尼窗口 |
 
 这些修复的共同标准是：不靠缩短寿命或隐藏对象掩盖问题，而是找到输入、空间覆盖、能量来源和生命周期之间的真实矛盾。
@@ -189,7 +196,7 @@ rover.combat.DrawAttackTraceDuration <秒>
 | 脚本 | 关键证据 | 结果 |
 |---|---|---|
 | `BuildEditor.ps1` | Runtime / Editor 模块，UE 5.8 Development Editor | 通过 |
-| `ValidatePhysicsWorldLooseDebrisPIE.ps1` | 静止 `0` 场；移动 `1`、攻击 `3`、起跳 `22`、落地 `1`、爆炸 `1`；`interaction_systems=0`、NDC 写入 `28`、预算丢弃 `1`、旋转 `0/0@8` | 通过 |
+| `ValidatePhysicsWorldLooseDebrisPIE.ps1` | 最新 Dynamic Bounds 资产回归：移动 `1`、攻击 `2`、起跳 `21`、落地 `1`、爆炸 `1`；`interaction_systems=0`、NDC 写入 `26`、空间覆盖与贴地投影有效 | 通过 |
 | `ValidatePhysicsWorldBoxPhysicsPIE.ps1` | 完整箱 / GC `80kg`、质量相关破裂冲量、重力 `-980cm/s²`、GC 接管连续、碎片展开 `20.1cm` | 通过 |
 | `ValidatePhysicsWorldRopeBridgePIE.ps1` | `60` 板 / `122` 约束；Attack `158.8cm/s`、Landing `309.2cm/s`、比值 `0.514`；相对推进 `18.7cm`；恢复 `0/0` | 通过 |
 | `ValidateRoverPIE.ps1` | GameMode、Pawn、输入映射与跳跃冒烟 | 通过 |

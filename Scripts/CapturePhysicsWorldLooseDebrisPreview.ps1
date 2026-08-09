@@ -3,6 +3,7 @@ param(
     [string]$EngineRoot = "D:\unreal\UE_5.8",
     [string]$OutputPath,
     [switch]$Baseline,
+    [ValidateRange(-80.0, 80.0)][float]$ViewPitch = 0.0,
     [ValidateRange(30, 300)][int]$TimeoutSeconds = 120
 )
 
@@ -36,6 +37,9 @@ $previousOutput = [Environment]::GetEnvironmentVariable(
 $previousBaseline = [Environment]::GetEnvironmentVariable(
     "ROVER_LOOSE_DEBRIS_BASELINE", [EnvironmentVariableTarget]::Process
 )
+$previousViewPitch = [Environment]::GetEnvironmentVariable(
+    "ROVER_LOOSE_DEBRIS_VIEW_PITCH", [EnvironmentVariableTarget]::Process
+)
 try {
     [Environment]::SetEnvironmentVariable(
         "ROVER_LOOSE_DEBRIS_SCREENSHOT",
@@ -45,6 +49,11 @@ try {
     [Environment]::SetEnvironmentVariable(
         "ROVER_LOOSE_DEBRIS_BASELINE",
         $(if ($Baseline) { "1" } else { "0" }),
+        [EnvironmentVariableTarget]::Process
+    )
+    [Environment]::SetEnvironmentVariable(
+        "ROVER_LOOSE_DEBRIS_VIEW_PITCH",
+        $ViewPitch.ToString([Globalization.CultureInfo]::InvariantCulture),
         [EnvironmentVariableTarget]::Process
     )
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -95,6 +104,11 @@ finally {
     [Environment]::SetEnvironmentVariable(
         "ROVER_LOOSE_DEBRIS_BASELINE",
         $previousBaseline,
+        [EnvironmentVariableTarget]::Process
+    )
+    [Environment]::SetEnvironmentVariable(
+        "ROVER_LOOSE_DEBRIS_VIEW_PITCH",
+        $previousViewPitch,
         [EnvironmentVariableTarget]::Process
     )
 }

@@ -138,6 +138,7 @@ UWorldInteractionSubsystem
 - Attack 使用地下 / 后方排斥力解除贴地状态，再用前上方吸引力形成沿刀路的短尾流；
 - Point Force 原点限制在自身半径的 `0.8R` 内，避免强上抬把力源移出覆盖范围；
 - Ambient 粒子落地后保持可再次受力；源码与已重建资产将持续旋转驱动力设为 `0/0`、Rotational Drag 设为 `8`、Restitution 设为 `0`，无头参数验证已通过，最终观感仍待有渲染 PIE；
+- 世界空间 CPU Emitter 已由 Fixed Bounds 改为 Dynamic Bounds，解决镜头向下时整套 Renderer 被视锥裁剪的问题；`Pitch=-45deg` 预览保持可见；
 - 轻量场不进入标准 Chaos 请求链，不改变木箱、吊桥或角色的真实物理冲量；
 - DataAsset 增加一次性 Schema 迁移，Niagara 模块 / User 参数绑定失败会让资产生成流程失败；
 - 无头 PIE 覆盖静止、走跑、空挥、起跳、落地、爆炸、攻击尾流、空间覆盖、限流与 `interaction_systems=0`。
@@ -148,7 +149,7 @@ UWorldInteractionSubsystem
 - 走 / 跑 / 起跳 / 落地 / 攻击 / 爆炸的固定路线视频与参数快照；
 - Niagara CPU Sim 单区域的固定硬件 p50 / p95 基线；
 - CPU Ambient 与 GPU + Niagara Data Channel 消费的同场景 A/B；
-- 多 Region、World Partition Cell、区域边缘与 LWC 远原点验证。
+- 多 Region、World Partition Cell、区域边缘、LWC 远原点以及 Dynamic Bounds 成本验证。
 
 ### P1：表面语言与环境表现
 

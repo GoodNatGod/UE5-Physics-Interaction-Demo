@@ -18,6 +18,7 @@ SCREENSHOT_PATH = os.environ.get(
 )
 SUCCESS_MARKER = "PHYSICS_WORLD_LOOSE_DEBRIS_PREVIEW_OK"
 FAILURE_MARKER = "PHYSICS_WORLD_LOOSE_DEBRIS_PREVIEW_FAIL"
+VIEW_PITCH = float(os.environ.get("ROVER_LOOSE_DEBRIS_VIEW_PITCH", "0.0"))
 
 
 level_editor = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -109,7 +110,9 @@ def activate_preview(world):
 
     controller = unreal.GameplayStatics.get_player_controller(world, 0)
     if controller:
-        controller.set_control_rotation(pawn.get_actor_rotation())
+        view_rotation = pawn.get_actor_rotation()
+        view_rotation.pitch = VIEW_PITCH
+        controller.set_control_rotation(view_rotation)
     unreal.SystemLibrary.execute_console_command(world, "pw.LooseDebris.DrawFields 1")
 
     state.update(

@@ -118,11 +118,17 @@ Content/PhysicsWorldDemo/LooseDebris/
 - 两个共享结构的 Emitter：Leaf 和 Paper；
 - `ENiagaraSimTarget::CPUSim`；
 - World Space，`bLocalSpace=false`；
-- Fixed Bounds，避免依赖动态 Bounds 造成离屏裁剪跳变；
+- Dynamic Bounds，由 CPU 粒子的实际位置逐帧更新，避免世界空间粒子离开固定框后被视锥整批裁剪；
 - Sprite Renderer + Two Sided Masked 材质；
 - Leaf / Paper 使用独立 Spawn Rate、Rotation Strength 和 Drag User 参数；
 - Wind Force 模块在生成阶段显式禁用；
 - Ambient 每个 Emitter 有两个 V2 Point Attraction Force：通用释放力和 Attack 尾流力。
+
+#### 为什么从 Fixed Bounds 改为 Dynamic Bounds
+
+Ambient 是 World Space 常驻系统，粒子会被角色移动、刀路和爆炸持续带离初始区域。Fixed Bounds 只描述一块静态包围盒：即使粒子仍在模拟，只要该包围盒离开视锥，Renderer 就会把整套系统裁掉，表现为镜头轻微向下时所有叶片和纸片同时消失。
+
+当前 CPU Emitter 由实际粒子位置逐帧更新 Dynamic Bounds；`Pitch=-45deg` 的纯 Ambient 与交互预览均保持可见。约 `450` 粒子的单 Region 只是当前 P0 取舍，尚未形成固定硬件成本结论；扩大到多 Region 或 GPU Sim 时必须重新评估 Bounds 策略，不能直接把单区域结论外推到大世界规模。
 
 ### 4.2 稳态总量
 
@@ -398,13 +404,14 @@ Loose Debris 专项验证：
 2026-08-09 最新专项输出：
 
 ```text
-stationary_fields=0 movement_fields=1 attack_fields=3 attack_wake=1
-jump_fields=22 landing_fields=1 explosion_fields=1 interaction_systems=0
-ndc_writes=28 budget_drops=1 ground_projected=1 chaos_requests=0
+stationary_fields=0 movement_fields=1 attack_fields=2 attack_wake=1
+force_coverage=1 jump_fields=21 landing_fields=1 explosion_fields=1
+interaction_systems=0 ndc_writes=26 budget_drops=1
+ground_projected=1 chaos_requests=0
 ambient_rotation=0.00/0.00@8.00 lifecycle=0.4s->15.0s
 ```
 
-无头 PIE 不渲染最终画面。它不能检查粒子是否仍持续自转、材质是否穿帮、密度是否自然或尾流是否太强。
+无头 PIE 不渲染最终画面。Dynamic Bounds 资产已重建，另用 `Pitch=-45deg` 预览确认整套 System 不再随镜头俯仰消失；持续自转、材质穿帮、密度和尾流强弱仍需有渲染手感验收。
 
 ## 11. 有渲染 PIE 验收路线
 
@@ -418,8 +425,9 @@ ambient_rotation=0.00/0.00@8.00 lifecycle=0.4s->15.0s
 | V06 起跳 / 落地 | 原地跳和高处落地 | 层级清楚，事件不重复 |
 | V07 爆炸 | 火球命中区域 | 范围大于近战，方向呈径向 |
 | V08 边缘 | 穿过 Region 边界 | 系统不跟随玩家滑动，不整块跳变 |
-| V09 遮挡 | 粒子飞过遮挡并返回视野 | 无明显穿地或突然位置修正 |
-| V10 压力 | 连续移动、攻击、爆炸 | 总量、System 数和临时对象不持续增长 |
+| V09 镜头俯仰 | 从水平视角逐步俯视到 `Pitch=-45deg` | Ambient 不因包围盒裁剪整片消失 |
+| V10 遮挡 | 粒子飞过遮挡并返回视野 | 无明显穿地或突然位置修正 |
+| V11 压力 | 连续移动、攻击、爆炸 | 总量、System 数和临时对象不持续增长 |
 
 ## 12. 性能与规模化门槛
 
@@ -432,6 +440,7 @@ ambient_rotation=0.00/0.00@8.00 lifecycle=0.4s->15.0s
 - 固定 30 秒以上相机 / 操作路线；
 - Frame / Game / Render / GPU 的 p50、p95、峰值；
 - Niagara Sim、Sprite Renderer、材质 Overdraw 和碰撞成本；
+- CPU Dynamic Bounds 在 1 / 多 Region 下的更新成本；
 - 0 交互、单角色持续移动、多来源峰值三种负载；
 - CPU Ambient 与 GPU + NDC 消费的同场景 A/B；
 - World Partition Cell 加载卸载、区域边缘和 LWC 远原点测试。
@@ -444,7 +453,7 @@ ambient_rotation=0.00/0.00@8.00 lifecycle=0.4s->15.0s
 - 字段级 `FalloffExponent` / `SwirlStrength` 尚未完整进入 Ambient 两股力计算；
 - Ambient 通过持续耗散实现视觉静止，不是显式 Grounded / Airborne / Settling 状态机；
 - 当前地面投影由 CPU Trace 确定交互中心，粒子自身碰撞仍需复杂地形视觉检查；
-- 单 Region 固定 Bounds 尚未验证多层建筑、跨 Cell 和远离世界原点；
+- 当前仅验证单 Region 的 CPU Dynamic Bounds；多层建筑、跨 Cell、远离世界原点与多 Region 重叠仍未验证；
 - 当前材质与叶片 / 纸片 Sprite 轮廓为功能质量，不作为最终美术成果；
 - 性能预算和质量档位还没有固化成 Effect Type 的正式平台配置。
 

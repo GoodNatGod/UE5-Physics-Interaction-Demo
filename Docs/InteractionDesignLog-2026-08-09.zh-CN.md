@@ -152,7 +152,7 @@ flowchart LR
 
 当前采用“视觉静止，但保持可交互”的折中：
 
-- Ambient 使用 CPU Sim、Sprite Renderer、世界空间、Fixed Bounds 和碰撞；
+- Ambient 使用 CPU Sim、Sprite Renderer、世界空间、动态粒子 Bounds 和碰撞；
 - 重力让出生在空中的粒子回到地面；
 - `AmbientRestitution=0`，避免接触面持续微弹；
 - `AmbientRotationalDrag=8`，快速耗散角速度；
@@ -162,6 +162,19 @@ flowchart LR
 - 下一次 Point Force 仍能移动已经贴地的粒子。
 
 这次修改直接对应“落叶一直原地转圈”的问题。根因不是全局风，而是 Ambient 在没有真正休眠的情况下仍持续施加空气动力旋转，碰撞微速度又不断把能量送回角向求解。处理方式是关闭持续旋转驱动并增强角向耗散，而不是把所有交互力一起关掉；源码、资产迁移和无头参数验证已经完成，最终是否达到视觉目标仍以有渲染 PIE 为准。
+
+### 镜头俯仰导致整片消失
+
+后续观察发现，镜头轻微向下时整片落叶会同时不可见。此时 Region 仍在持续生成，粒子寿命仍为约 `30s`，碰撞也没有 Kill，因此不是粒子数量或生命周期问题。
+
+实际原因是 Ambient 原来使用 Fixed Bounds。粒子以 World Space 模拟并受到移动、攻击和爆炸推动后，实际位置会逐渐超出固定包围盒；当固定包围盒离开视锥时，Niagara Renderer 会把整个 System 一次性裁掉。
+
+当前两个 CPU Emitter 改为动态粒子 Bounds：
+
+- 包围范围由实际粒子位置逐帧更新；
+- 当前只在约 `450` 粒子的 P0 单 Region 采用，正式 CPU Bounds 成本仍待测量；
+- `Pitch=-45deg` 的纯 Ambient 与交互预览均保持可见；
+- 这项修复只解决整套 Renderer 裁剪，不掩盖个别 Sprite 贴地变薄或碰撞闪烁。
 
 ### 配置迁移规则
 
@@ -234,13 +247,14 @@ pw.LooseDebris.DrawFields 0/1
 ```text
 stationary_fields=0
 movement_fields=1
-attack_fields=3
+attack_fields=2
 attack_wake=1
-jump_fields=22
+force_coverage=1
+jump_fields=21
 landing_fields=1
 explosion_fields=1
 interaction_systems=0
-ndc_writes=28
+ndc_writes=26
 budget_drops=1
 ground_projected=1
 ambient_rotation=0.00/0.00@8.00
@@ -263,6 +277,7 @@ chaos_requests=0
 | 攻击像圆形排斥 | 只有径向力，没有方向目标 | 叠加前上方短时吸引力 | 刀路需要方向性反馈，不只是强度更大 |
 | 爆炸参数更强却没有反馈 | 地下力源偏移超过自身半径 | 偏移限制在 `0.8R` 内 | 调强度前先验证空间覆盖关系 |
 | 落叶一直原地旋转 | Ambient 持续 Rotation Strength + 低角阻尼 + 碰撞微能量 | Rotation `0/0`、Rotational Drag `8`、Calming `12`、Restitution `0` | 恢复安静必须单独设计能量出口 |
+| 镜头向下时整片消失 | World Space 粒子超出 Fixed Bounds，固定包围盒离开视锥后整套 Renderer 被裁剪 | CPU Emitter 改用 Dynamic Bounds，并用 `Pitch=-45deg` 预览 | 粒子是否存在与渲染边界是否可见必须分开诊断 |
 
 ## 当前边界
 
@@ -270,7 +285,7 @@ chaos_requests=0
 - Data Channel 已建立并写入，但当前没有 Reader；Region 只通过委托和 User 参数驱动 Ambient，Islands / GPU 消费仍需 A/B 测试；
 - 当前叶片和纸片是低成本表现物，不具备真实 kg、阻挡、拾取和网络权威语义；
 - 还没有提交固定硬件下的 Niagara Game / Render / GPU p50、p95 数据；
-- 营地单区域通过不代表 World Partition 多 Cell、LWC 远原点和区域边缘已经验收；
+- 单 Region CPU Dynamic Bounds 已通过当前镜头俯仰观察，但多 Region、World Partition Cell、LWC 远原点、区域边缘和 Bounds 更新成本仍未验收；
 - 无头 PIE 不检查最终画面，持续旋转修复仍应以实际有渲染 PIE 做最终观感确认。
 
 ## 面试讲解重点
