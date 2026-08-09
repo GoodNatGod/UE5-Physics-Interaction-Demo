@@ -18,11 +18,12 @@ BRIDGE_TUNING = {
     "unloaded_recovery_rest_tolerance_degrees": 2.0,
     "unloaded_recovery_stop_angular_speed_degrees": 5.0,
     "suppress_root_motion_movement_impulses": True,
+    "root_motion_movement_impulse_suppression_grace_time": 0.60,
     "minimum_landing_speed": 180.0,
 }
 MOVEMENT_TUNING = {
     "gravity_scale": 1.40,
-    "attack_advance_scale_on_simulated_base": 0.0,
+    "attack_advance_scale_on_simulated_base": 0.65,
     "attack_physics_push_scale_on_simulated_base": 0.0,
     "attack_standing_downward_force_scale_on_simulated_base": 1.0,
 }

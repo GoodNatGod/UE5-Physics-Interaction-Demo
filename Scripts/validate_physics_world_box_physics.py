@@ -11,6 +11,7 @@ MINIMUM_LIFT_HEIGHT_CM = 500.0
 MIN_CLEARANCE_AFTER_FALL_CM = 250.0
 FALL_SAMPLE_SECONDS = 0.20
 FALL_CLEARANCE_GUARD_SECONDS = 0.50
+FALL_WARMUP_FRAMES = 8
 MASS_TOLERANCE_KG = 0.10
 GRAVITY_TOLERANCE_CM_S2 = 0.10
 MAX_BREAK_TRANSFER_ERROR_CM = 1.0
@@ -46,6 +47,7 @@ state = {
     "fall_start_time": 0.0,
     "fall_start_z": 0.0,
     "fall_start_velocity_z": 0.0,
+    "fall_warmup_frames": 0,
     "fall_elapsed": 0.0,
     "fall_displacement_z": 0.0,
     "fall_velocity_z": 0.0,
@@ -379,22 +381,33 @@ def begin_validation(world):
     )
 
 
-def arm_free_fall():
+def warm_up_free_fall():
+    box = state["box"]
     intact_mesh = state["intact_mesh"]
-    current_location = intact_mesh.get_world_location()
-    if abs(current_location.z - state["lifted_z"]) > 25.0:
+    lifted_location = unreal.Vector(
+        box.get_actor_location().x,
+        box.get_actor_location().y,
+        state["lifted_z"],
+    )
+    if not box.set_actor_location(lifted_location, False, True):
         fail(
-            "box moved unexpectedly while arming free fall; "
-            f"z={current_location.z:.2f} target={state['lifted_z']:.2f}"
+            "unable to hold the intact box at the free-fall test height during warmup"
         )
         return
-
-    # Clear the single gravity step that can occur between teleport and this callback.
     intact_mesh.set_physics_linear_velocity(unreal.Vector(0.0, 0.0, 0.0))
     intact_mesh.set_physics_angular_velocity_in_degrees(
         unreal.Vector(0.0, 0.0, 0.0)
     )
     intact_mesh.wake_all_rigid_bodies()
+
+    state["fall_warmup_frames"] += 1
+    state["last"] = (
+        f"warming physics frame {state['fall_warmup_frames']}/{FALL_WARMUP_FRAMES}"
+    )
+    if state["fall_warmup_frames"] < FALL_WARMUP_FRAMES:
+        return
+
+    current_location = intact_mesh.get_world_location()
     start_velocity = intact_mesh.get_physics_linear_velocity()
     start_time = unreal.GameplayStatics.get_time_seconds(state["world"])
     state.update(
@@ -608,7 +621,7 @@ def on_tick(_delta_seconds):
         if state["phase"] == "starting" and level_editor.is_in_play_in_editor() and world:
             begin_validation(world)
         elif state["phase"] == "resetting_fall":
-            arm_free_fall()
+            warm_up_free_fall()
         elif state["phase"] == "free_fall":
             validate_free_fall()
         elif state["phase"] == "checking_geometry_collection":

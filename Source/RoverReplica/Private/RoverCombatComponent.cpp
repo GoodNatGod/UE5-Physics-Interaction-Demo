@@ -1659,6 +1659,16 @@ void URoverCombatComponent::PerformWeaponTrace()
 	{
 		FrameImpactDirection = CharacterOwner->GetActorForwardVector();
 	}
+	if (UWorldInteractionSubsystem* InteractionSubsystem =
+		GetWorld()->GetSubsystem<UWorldInteractionSubsystem>())
+	{
+		InteractionSubsystem->PublishWeaponSweepField(
+			CharacterOwner,
+			CurrentBase,
+			CurrentTip,
+			FrameImpactDirection,
+			MaxEndpointTravel);
+	}
 
 	for (int32 SubstepIndex = 0; SubstepIndex < SubstepCount; ++SubstepIndex)
 	{

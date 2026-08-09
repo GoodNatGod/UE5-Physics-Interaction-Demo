@@ -6,6 +6,7 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/RootMotionSource.h"
+#include "WorldInteractionSubsystem.h"
 
 namespace
 {
@@ -55,6 +56,8 @@ void URoverLocomotionComponent::BeginPlay()
 	}
 	ApplySettings();
 	UpdateLocomotionState();
+	PreviousLooseDebrisSampleLocation = CharacterOwner->GetActorLocation();
+	bHasPreviousLooseDebrisSample = true;
 }
 
 void URoverLocomotionComponent::TickComponent(
@@ -99,6 +102,53 @@ void URoverLocomotionComponent::TickComponent(
 	UpdateMoveStopWatchdog(DeltaTime);
 	UpdateLocomotionState();
 	UpdateGait();
+	PublishLooseDebrisMovementField();
+}
+
+void URoverLocomotionComponent::PublishLooseDebrisMovementField()
+{
+	if (!CharacterOwner || !CharacterMovement || !GetWorld())
+	{
+		return;
+	}
+
+	const float CapsuleHalfHeight = CharacterOwner->GetCapsuleComponent()
+		? CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight()
+		: 0.0f;
+	const FVector CurrentSample = CharacterOwner->GetActorLocation() -
+		FVector(0.0f, 0.0f, FMath::Max(0.0f, CapsuleHalfHeight - 8.0f));
+	if (!bHasPreviousLooseDebrisSample)
+	{
+		PreviousLooseDebrisSampleLocation = CurrentSample;
+		bHasPreviousLooseDebrisSample = true;
+		return;
+	}
+
+	if (!CharacterMovement->IsMovingOnGround())
+	{
+		PreviousLooseDebrisSampleLocation = CurrentSample;
+		return;
+	}
+
+	if (UWorldInteractionSubsystem* Subsystem =
+		GetWorld()->GetSubsystem<UWorldInteractionSubsystem>())
+	{
+		const FWorldLooseDebrisSettings& DebrisSettings = Subsystem->GetLooseDebrisSettings();
+		const FVector Velocity = CharacterOwner->GetVelocity();
+		if (!DebrisSettings.bEnabled || Velocity.Size2D() < DebrisSettings.MovementMinSpeed)
+		{
+			PreviousLooseDebrisSampleLocation = CurrentSample;
+			return;
+		}
+		if (Subsystem->PublishCharacterMovementField(
+			CharacterOwner,
+			PreviousLooseDebrisSampleLocation,
+			CurrentSample,
+			Velocity))
+		{
+			PreviousLooseDebrisSampleLocation = CurrentSample;
+		}
+	}
 }
 
 const FRoverMovementSettings& URoverLocomotionComponent::GetSettings() const
@@ -613,6 +663,22 @@ void URoverLocomotionComponent::HandleGroundJumped()
 	bGroundJumpUsedLeftFoot = bNextGroundJumpUsesLeftFoot;
 	bNextGroundJumpUsesLeftFoot = !bNextGroundJumpUsesLeftFoot;
 	GroundJumpRequestId = GroundJumpRequestId == MAX_int32 ? 1 : GroundJumpRequestId + 1;
+	if (GetWorld())
+	{
+		const float CapsuleHalfHeight = CharacterOwner->GetCapsuleComponent()
+			? CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight()
+			: 0.0f;
+		const FVector JumpLocation = CharacterOwner->GetActorLocation() -
+			FVector(0.0f, 0.0f, FMath::Max(0.0f, CapsuleHalfHeight - 5.0f));
+		if (UWorldInteractionSubsystem* Subsystem =
+			GetWorld()->GetSubsystem<UWorldInteractionSubsystem>())
+		{
+			Subsystem->PublishJumpField(
+				CharacterOwner,
+				JumpLocation,
+				CharacterOwner->GetVelocity());
+		}
+	}
 	UpdateLocomotionState();
 }
 
@@ -657,6 +723,19 @@ void URoverLocomotionComponent::HandleLanded(
 	const FRoverMovementSettings& Settings = GetSettings();
 	const float ResolvedImpactSpeed = FMath::Max(ImpactSpeed, CachedDownwardSpeed);
 	CachedDownwardSpeed = 0.0f;
+	if (CharacterOwner && GetWorld())
+	{
+		const float CapsuleHalfHeight = CharacterOwner->GetCapsuleComponent()
+			? CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight()
+			: 0.0f;
+		const FVector LandingLocation = CharacterOwner->GetActorLocation() -
+			FVector(0.0f, 0.0f, FMath::Max(0.0f, CapsuleHalfHeight - 5.0f));
+		if (UWorldInteractionSubsystem* Subsystem =
+			GetWorld()->GetSubsystem<UWorldInteractionSubsystem>())
+		{
+			Subsystem->PublishLandingField(CharacterOwner, LandingLocation, ResolvedImpactSpeed);
+		}
+	}
 	bSecondJumpUsed = false;
 	InputLockRemaining = 0.0f;
 	LandingStateRemaining = 0.0f;

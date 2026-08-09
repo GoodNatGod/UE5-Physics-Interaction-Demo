@@ -193,6 +193,7 @@ private:
 	void UpdateActiveRunTurnback();
 	void UpdateGroundTurnRequest();
 	void UpdateMoveStopWatchdog(float DeltaTime);
+	void PublishLooseDebrisMovementField();
 	bool ShouldRequestReleaseStop() const;
 	void RequestReleaseStop();
 	bool ResolveMoveStopUseLeftVariant() const;
@@ -271,4 +272,6 @@ private:
 	float CombatPhysicsRestoreStartPushForceFactor = 0.0f;
 	float CombatPhysicsRestoreStartStandingDownwardForceScale = 0.0f;
 	bool bCombatPhysicsRestoreActive = false;
+	FVector PreviousLooseDebrisSampleLocation = FVector::ZeroVector;
+	bool bHasPreviousLooseDebrisSample = false;
 };

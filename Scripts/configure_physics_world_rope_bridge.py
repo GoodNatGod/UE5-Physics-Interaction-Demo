@@ -228,7 +228,8 @@ def ensure_bridge_actor(
         raise RuntimeError(
             f"Resolved plank count must be at least 12; got {expected_plank_count}"
         )
-    expected_constraint_count = expected_plank_count + 3
+    # Two constraints stabilize every internal seam, plus two anchors per end.
+    expected_constraint_count = 2 * (expected_plank_count - 1) + 4
     if bridge.get_generated_plank_count() != expected_plank_count:
         raise RuntimeError(
             f"Unexpected construction plank count: "

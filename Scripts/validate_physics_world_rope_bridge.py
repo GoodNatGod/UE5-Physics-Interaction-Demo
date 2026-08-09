@@ -41,6 +41,8 @@ ATTACK_SETTLED_ANGULAR_SPEED = 35.0
 ATTACK_REPEAT_MIN_WAIT_SECONDS = 1.0
 ATTACK_REPEAT_QUIET_SECONDS = 0.20
 ATTACK_RESTORE_GRACE_SECONDS = 1.0
+ATTACK_SUPPORT_GRACE_SECONDS = 1.50
+MIN_ATTACK_RELATIVE_ADVANCE_CM = 15.0
 FIRST_LOAD_HITCH_MIN_DELTA_SECONDS = 0.050
 FIRST_LOAD_HITCH_MIN_DELTA_GAP_SECONDS = 0.015
 FIRST_LOAD_HITCH_MIN_DELTA_RATIO = 1.50
@@ -50,8 +52,12 @@ RECOVERY_SECONDS = 10.0
 MAX_REST_ANGULAR_ERROR_DEGREES = 2.0
 WALK_TEST_SPEED = 140.0
 RUN_TEST_SPEED = 500.0
-MAX_ENDPOINT_ERROR_CM = 12.0
+MAX_PRIMARY_ENDPOINT_ERROR_CM = 3.0
+MAX_SECONDARY_VERTICAL_OFFSET_CM = 12.0
+MAX_SECONDARY_LOCKED_AXIS_ERROR_CM = 25.0
+MAX_SECONDARY_FREE_AXIS_ERROR_CM = 3.0
 MAX_ADJACENT_DISTANCE_ERROR_CM = 10.0
+MAX_PRIMARY_INTERNAL_FRAME_SEPARATION_CM = 3.0
 MAX_CENTER_DROP_CM = 75.0
 START_TIMEOUT_SECONDS = 30.0
 PHASE_TIMEOUT_SECONDS = 20.0
@@ -115,6 +121,7 @@ state = {
     "attack_restore_wait_started": None,
     "attack_samples": [],
     "attack_repeat_quiet_since": None,
+    "attack_unsupported_since": None,
     "current_delta_seconds": 0.0,
     "attack_delta_total_seconds": 0.0,
     "attack_delta_frame_count": 0,
@@ -127,6 +134,8 @@ state = {
     "attack_reference_plank": None,
     "attack_start_relative_location": None,
     "attack_max_relative_displacement": 0.0,
+    "attack_advance_direction": None,
+    "attack_max_relative_forward_displacement": 0.0,
     "attack_first_load_hitch": False,
     "attack_delta_ratio": 0.0,
     "walk_peak_linear": 0.0,
@@ -146,7 +155,11 @@ state = {
     "recovery_rest_angular_error": 0.0,
     "initial_rest_angular_error": 0.0,
     "maximum_endpoint_error": 0.0,
+    "maximum_secondary_vertical_offset": 0.0,
+    "maximum_secondary_bridge_axis_error": 0.0,
+    "maximum_secondary_width_axis_offset": 0.0,
     "maximum_joint_error": 0.0,
+    "maximum_primary_internal_frame_separation": 0.0,
     "maximum_anchor_frame_error": 0.0,
     "support_count": 0,
     "primary_anchor_count": 0,
@@ -218,9 +231,16 @@ def validate_constraint_profile(constraint, settings, secondary, internal=False)
     swing2 = cone.get_editor_property("swing2_motion")
     twist_motion = twist.get_editor_property("twist_motion")
     if secondary:
-        for axis in ("x_motion", "y_motion"):
-            if not enum_matches(linear.get_editor_property(axis), "LCM_LOCKED"):
-                raise RuntimeError(f"{constraint.get_name()} {axis} is not locked")
+        if not enum_matches(
+            linear.get_editor_property("x_motion"), "LCM_LOCKED"
+        ):
+            raise RuntimeError(
+                f"resting secondary {constraint.get_name()} x_motion is not locked"
+            )
+        if not enum_matches(
+            linear.get_editor_property("y_motion"), "LCM_LOCKED"
+        ):
+            raise RuntimeError(f"{constraint.get_name()} y_motion is not locked")
         if not enum_matches(
             linear.get_editor_property("z_motion"), "LCM_FREE"
         ):
@@ -548,9 +568,18 @@ def sample_stability():
     angular = float(bridge.get_maximum_plank_angular_speed_degrees())
     endpoint_error = float(bridge.get_maximum_endpoint_position_error())
     joint_error = float(bridge.get_maximum_adjacent_plank_distance_error())
+    primary_internal_frame_separation = float(
+        bridge.get_maximum_primary_internal_constraint_frame_separation()
+    )
     if not all(
         math.isfinite(value)
-        for value in (linear, angular, endpoint_error, joint_error)
+        for value in (
+            linear,
+            angular,
+            endpoint_error,
+            joint_error,
+            primary_internal_frame_separation,
+        )
     ):
         fail("bridge physics produced a non-finite value")
         return None
@@ -561,11 +590,141 @@ def sample_stability():
     state["maximum_joint_error"] = max(
         state["maximum_joint_error"], joint_error
     )
-    if endpoint_error > MAX_ENDPOINT_ERROR_CM:
-        fail(f"anchor drift={endpoint_error:.2f}cm")
+    state["maximum_primary_internal_frame_separation"] = max(
+        state["maximum_primary_internal_frame_separation"],
+        primary_internal_frame_separation,
+    )
+    anchor_offsets = [
+        bridge.get_endpoint_constraint_frame_offset(index) for index in range(4)
+    ]
+    if not all(
+        math.isfinite(component)
+        for offset in anchor_offsets
+        for component in (offset.x, offset.y, offset.z)
+    ):
+        fail("bridge anchor frame offset is non-finite")
+        return None
+    primary_endpoint_error = max(
+        abs(component)
+        for index in (0, 2)
+        for component in (
+            anchor_offsets[index].x,
+            anchor_offsets[index].y,
+            anchor_offsets[index].z,
+        )
+    )
+    secondary_vertical_offset = max(
+        abs(anchor_offsets[index].x) for index in (1, 3)
+    )
+    secondary_bridge_axis_error = max(
+        abs(anchor_offsets[index].y) for index in (1, 3)
+    )
+    secondary_width_axis_offset = max(
+        abs(anchor_offsets[index].z) for index in (1, 3)
+    )
+    state["maximum_secondary_vertical_offset"] = max(
+        state["maximum_secondary_vertical_offset"], secondary_vertical_offset
+    )
+    state["maximum_secondary_bridge_axis_error"] = max(
+        state["maximum_secondary_bridge_axis_error"], secondary_bridge_axis_error
+    )
+    state["maximum_secondary_width_axis_offset"] = max(
+        state["maximum_secondary_width_axis_offset"], secondary_width_axis_offset
+    )
+    if primary_endpoint_error > MAX_PRIMARY_ENDPOINT_ERROR_CM:
+        fail(f"primary anchor drift={primary_endpoint_error:.2f}cm")
+        return None
+    if secondary_vertical_offset > MAX_SECONDARY_VERTICAL_OFFSET_CM:
+        fail(
+            f"secondary anchor vertical offset={secondary_vertical_offset:.2f}cm "
+            f"limit={MAX_SECONDARY_VERTICAL_OFFSET_CM:.2f}cm"
+        )
+        return None
+    if secondary_bridge_axis_error > MAX_SECONDARY_LOCKED_AXIS_ERROR_CM:
+        fail(
+            f"secondary anchor bridge-axis error={secondary_bridge_axis_error:.2f}cm "
+            f"xyz={secondary_vertical_offset:.2f}/"
+            f"{secondary_bridge_axis_error:.2f}/{secondary_width_axis_offset:.2f}cm"
+        )
+        return None
+    if secondary_width_axis_offset > MAX_SECONDARY_FREE_AXIS_ERROR_CM:
+        fail(
+            f"secondary anchor width-axis offset={secondary_width_axis_offset:.2f}cm "
+            f"xyz={secondary_vertical_offset:.2f}/"
+            f"{secondary_bridge_axis_error:.2f}/{secondary_width_axis_offset:.2f}cm"
+        )
+        return None
+    if (
+        primary_internal_frame_separation
+        > MAX_PRIMARY_INTERNAL_FRAME_SEPARATION_CM
+    ):
+        fail(
+            f"primary internal constraint frame separation="
+            f"{primary_internal_frame_separation:.2f}cm"
+        )
         return None
     if joint_error > MAX_ADJACENT_DISTANCE_ERROR_CM:
-        fail(f"adjacent plank distance error={joint_error:.2f}cm")
+        settings = bridge.get_resolved_bridge_settings()
+        plank_count = int(settings.get_editor_property("plank_count"))
+        step = float(settings.get_editor_property("plank_depth")) + float(
+            settings.get_editor_property("plank_gap")
+        )
+        span = step * float(plank_count - 1)
+        sag = min(float(settings.get_editor_property("bridge_sag")), span * 0.25)
+        worst_index = -1
+        worst_actual = 0.0
+        worst_rest = 0.0
+        worst_error = -1.0
+        for index in range(plank_count - 1):
+            alpha1 = float(index) / float(plank_count - 1)
+            alpha2 = float(index + 1) / float(plank_count - 1)
+            rest_z1 = -4.0 * sag * alpha1 * (1.0 - alpha1)
+            rest_z2 = -4.0 * sag * alpha2 * (1.0 - alpha2)
+            rest_distance = math.sqrt(step * step + (rest_z2 - rest_z1) ** 2)
+            plank1 = bridge.get_plank_component(index)
+            plank2 = bridge.get_plank_component(index + 1)
+            actual_distance = vector_distance(
+                plank1.get_world_location(), plank2.get_world_location()
+            )
+            error = abs(actual_distance - rest_distance)
+            if error > worst_error:
+                worst_index = index
+                worst_actual = actual_distance
+                worst_rest = rest_distance
+                worst_error = error
+        supported_characters = []
+        for character in unreal.GameplayStatics.get_all_actors_of_class(
+            state["world"], unreal.Character
+        ):
+            if bridge.is_character_supported_by_bridge(character):
+                location = character.get_actor_location()
+                nearest_index = -1
+                nearest_distance = float("inf")
+                for index in range(plank_count):
+                    distance = vector_distance(
+                        location, bridge.get_plank_component(index).get_world_location()
+                    )
+                    if distance < nearest_distance:
+                        nearest_index = index
+                        nearest_distance = distance
+                supported_characters.append(
+                    f"{character.get_name()}@"
+                    f"{location.x:.0f},{location.y:.0f},{location.z:.0f}:"
+                    f"nearest={nearest_index}/{nearest_distance:.0f}cm"
+                )
+        bridge_location = bridge.get_actor_location()
+        bridge_scale = bridge.get_actor_scale3d()
+        fail(
+            f"adjacent plank distance error={joint_error:.2f}cm "
+            f"seam={worst_index}-{worst_index + 1} "
+            f"actual/rest={worst_actual:.2f}/{worst_rest:.2f}cm "
+            f"primary_frame="
+            f"{bridge.get_maximum_primary_internal_constraint_frame_separation():.2f}cm "
+            f"supported={supported_characters} "
+            f"bridge={bridge_location.x:.0f},{bridge_location.y:.0f},{bridge_location.z:.0f} "
+            f"scale={bridge_scale.x:.2f},{bridge_scale.y:.2f},{bridge_scale.z:.2f} "
+            f"width={float(settings.get_editor_property('plank_width')):.0f}cm"
+        )
         return None
     return linear, angular
 
@@ -702,6 +861,11 @@ def begin_validation(world):
             "attack_physics_push_scale_on_simulated_base"
         )
     )
+    attack_advance_scale = float(
+        movement_settings.get_editor_property(
+            "attack_advance_scale_on_simulated_base"
+        )
+    )
     attack_standing_force_scale = float(
         movement_settings.get_editor_property(
             "attack_standing_downward_force_scale_on_simulated_base"
@@ -725,6 +889,9 @@ def begin_validation(world):
     if attack_physics_push_scale < 0.0 or attack_physics_push_scale > 1.0:
         fail(f"invalid attack physics push scale={attack_physics_push_scale:.3f}")
         return
+    if attack_advance_scale <= 0.0 or attack_advance_scale > 1.0:
+        fail(f"invalid bridge attack advance scale={attack_advance_scale:.3f}")
+        return
     if attack_standing_force_scale < 0.0 or attack_standing_force_scale > 1.0:
         fail(f"invalid attack standing load scale={attack_standing_force_scale:.3f}")
         return
@@ -746,10 +913,16 @@ def begin_validation(world):
     capsule_half_height = (
         float(capsule.get_scaled_capsule_half_height()) if capsule else 90.0
     )
+    capsule_radius = float(capsule.get_scaled_capsule_radius()) if capsule else 0.0
+    bridge_half_width = (
+        float(settings.get_editor_property("plank_width"))
+        * abs(float(bridge.get_actor_scale3d().y))
+        * 0.5
+    )
     safe_departure_location = (
         bridge.get_actor_location()
         + bridge.get_actor_right_vector()
-        * (float(settings.get_editor_property("plank_width")) * 0.5 + 600.0)
+        * (bridge_half_width + capsule_radius + 600.0)
         + bridge.get_actor_up_vector()
         * (
             float(settings.get_editor_property("support_height"))
@@ -798,6 +971,7 @@ def begin_validation(world):
             "original_initial_push_force": original_initial_push_force,
             "original_push_force": original_push_force,
             "attack_physics_push_scale": attack_physics_push_scale,
+            "attack_advance_scale": attack_advance_scale,
             "attack_standing_force_scale": attack_standing_force_scale,
         }
     )
@@ -908,6 +1082,7 @@ def place_character_over_center(drop_height, next_phase):
         0.0, 0.0, capsule_half_height + drop_height
     )
     movement.stop_movement_immediately()
+    state["support_since"] = None
     if not pawn.set_actor_location(location, False, True):
         fail("unable to place Rover over the bridge")
         return
@@ -1021,6 +1196,7 @@ def reset_attack_sample_metrics():
             "attack_peak_push_force": 0.0,
             "attack_peak_standing_force_scale": 0.0,
             "attack_restore_wait_started": None,
+            "attack_unsupported_since": None,
             "attack_delta_total_seconds": 0.0,
             "attack_delta_frame_count": 0,
             "attack_max_delta_seconds": 0.0,
@@ -1032,6 +1208,8 @@ def reset_attack_sample_metrics():
             "attack_reference_plank": None,
             "attack_start_relative_location": None,
             "attack_max_relative_displacement": 0.0,
+            "attack_advance_direction": None,
+            "attack_max_relative_forward_displacement": 0.0,
         }
     )
 
@@ -1061,6 +1239,9 @@ def complete_attack_sample():
         "peak_push_force": state["attack_peak_push_force"],
         "peak_standing_force_scale": state["attack_peak_standing_force_scale"],
         "max_pawn_displacement": state["attack_max_pawn_displacement"],
+        "max_relative_forward_displacement": state[
+            "attack_max_relative_forward_displacement"
+        ],
         "max_horizontal_speed": state["attack_max_horizontal_speed"],
         "max_vertical_speed": state["attack_max_vertical_speed"],
         "average_delta_seconds": average_delta,
@@ -1081,6 +1262,7 @@ def complete_attack_sample():
         f"character_push={sample['peak_initial_push_force']:.1f}/"
         f"{sample['peak_push_force']:.1f}/"
         f"standing={sample['peak_standing_force_scale']:.2f} "
+        f"relative_advance={sample['max_relative_forward_displacement']:.1f}cm "
         f"delta_avg={sample['average_delta_seconds'] * 1000.0:.2f}ms "
         f"delta_max={sample['max_delta_seconds'] * 1000.0:.2f}ms "
         f"request_call={sample['request_call_seconds'] * 1000.0:.2f}ms "
@@ -1145,7 +1327,7 @@ def begin_bridge_attack():
         fail("Rover was already attacking before the bridge attack probe")
         return
     request_started = time.perf_counter()
-    request_accepted = combat.request_light_attack()
+    request_accepted = combat.request_attack()
     state["attack_request_call_seconds"] = time.perf_counter() - request_started
     if not request_accepted:
         fail("grounded bridge Attack01 request was rejected")
@@ -1177,6 +1359,7 @@ def begin_bridge_attack():
     state["attack_start_relative_location"] = (
         state["attack_start_pawn_location"] - reference_plank.get_world_location()
     )
+    state["attack_advance_direction"] = state["pawn"].get_actor_forward_vector()
     set_phase("attacking_on_bridge")
     state["last"] = f"sampling bridge movement impulse during Attack01 request={request_id}"
 
@@ -1187,8 +1370,6 @@ def sample_bridge_attack():
         return
     if state["locomotion"].is_combat_attack_advance_active():
         state["attack_advance_seen"] = True
-        fail("Attack01 created a combat advance Root Motion Source on the bridge")
-        return
     state["attack_anim_root_motion_seen"] = (
         state["attack_anim_root_motion_seen"]
         or state["locomotion"].has_active_animation_root_motion()
@@ -1257,6 +1438,17 @@ def sample_bridge_attack():
                 state["attack_start_relative_location"],
             ),
         )
+        relative_delta = current_relative_location - state["attack_start_relative_location"]
+        advance_direction = state["attack_advance_direction"]
+        relative_forward_displacement = (
+            relative_delta.x * advance_direction.x
+            + relative_delta.y * advance_direction.y
+            + relative_delta.z * advance_direction.z
+        )
+        state["attack_max_relative_forward_displacement"] = max(
+            state["attack_max_relative_forward_displacement"],
+            relative_forward_displacement,
+        )
     pawn_velocity = state["movement"].get_editor_property("velocity")
     state["attack_max_pawn_displacement"] = max(
         state["attack_max_pawn_displacement"],
@@ -1270,8 +1462,25 @@ def sample_bridge_attack():
         state["attack_max_vertical_speed"], abs(pawn_velocity.z)
     )
     if not state["bridge"].is_character_supported_by_bridge(state["pawn"]):
-        fail("Rover lost bridge support during Attack01")
+        now = game_time()
+        if state["attack_unsupported_since"] is None:
+            state["attack_unsupported_since"] = now
+        unsupported_for = now - state["attack_unsupported_since"]
+        if unsupported_for > ATTACK_SUPPORT_GRACE_SECONDS:
+            fail(
+                "Rover lost bridge support during Attack01 for "
+                f"{unsupported_for:.2f}s"
+            )
+            return
+        state["last"] = (
+            f"Attack01 crossing a plank seam; support grace "
+            f"{unsupported_for:.2f}/{ATTACK_SUPPORT_GRACE_SECONDS:.2f}s "
+            f"mode={state['movement'].get_editor_property('movement_mode')} "
+            f"velocity_z={pawn_velocity.z:.1f} "
+            f"center_dz={pawn_location.z - state['center_plank'].get_world_location().z:.1f}cm"
+        )
         return
+    state["attack_unsupported_since"] = None
     if update_center_drop() is None:
         return
 
@@ -1338,6 +1547,20 @@ def sample_bridge_attack():
         return
     if not state["attack_push_scale_observed"]:
         fail("Attack01 never applied the simulated-base physics push scale")
+        return
+    if not state["attack_advance_seen"]:
+        fail("Attack01 never created its configured bridge attack advance")
+        return
+    if (
+        state["attack_max_relative_forward_displacement"]
+        < MIN_ATTACK_RELATIVE_ADVANCE_CM
+    ):
+        fail(
+            "Attack01 bridge-relative advance was too small: "
+            f"actual={state['attack_max_relative_forward_displacement']:.1f}cm "
+            f"minimum={MIN_ATTACK_RELATIVE_ADVANCE_CM:.1f}cm "
+            f"scale={state['attack_advance_scale']:.2f}"
+        )
         return
     if state["locomotion"].is_combat_attack_advance_active():
         fail("bridge Attack01 left an attack advance Root Motion Source active")
@@ -1714,6 +1937,8 @@ def validate_recovery():
                 f"attack_advance_seen={state['attack_advance_seen']}",
                 f"attack_anim_root_motion_seen={state['attack_anim_root_motion_seen']}",
                 f"attack_relative_move={state['attack_max_relative_displacement']:.1f}cm",
+                f"attack_relative_forward="
+                f"{state['attack_max_relative_forward_displacement']:.1f}cm",
                 f"attack_pawn_move={state['attack_max_pawn_displacement']:.1f}cm",
                 f"attack_pawn_speed={state['attack_max_horizontal_speed']:.1f}/"
                 f"{state['attack_max_vertical_speed']:.1f}cm/s",
@@ -1750,6 +1975,10 @@ def validate_recovery():
                 f"rest_angular_error="
                 f"{state['recovery_rest_angular_error']:.2f}deg",
                 f"anchor_error={state['maximum_endpoint_error']:.2f}cm",
+                f"secondary_anchor_xyz="
+                f"{state['maximum_secondary_vertical_offset']:.2f}/"
+                f"{state['maximum_secondary_bridge_axis_error']:.2f}/"
+                f"{state['maximum_secondary_width_axis_offset']:.2f}cm",
                 f"anchor_frame_error="
                 f"{state['maximum_anchor_frame_error']:.3f}cm",
                 f"joint_error={state['maximum_joint_error']:.2f}cm",

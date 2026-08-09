@@ -102,6 +102,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Physics World|Niagara")
 	static bool ConfigurePhysicsWorldNiagaraAssets();
 
+	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Physics World|Niagara")
+	static bool ConfigurePhysicsWorldLooseDebrisAssets();
+
 	UFUNCTION(BlueprintPure, Category = "Rover|Editor|Physics World", meta = (WorldContext = "WorldContextObject"))
 	static UWorldInteractionSubsystem* GetWorldInteractionSubsystem(
 		const UObject* WorldContextObject);

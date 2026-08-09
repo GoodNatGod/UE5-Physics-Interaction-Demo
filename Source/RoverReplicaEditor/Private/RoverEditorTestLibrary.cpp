@@ -23,21 +23,36 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Materials/MaterialInterface.h"
+#include "NiagaraConstants.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterHandle.h"
+#include "NiagaraDataChannel.h"
+#include "NiagaraDataChannelAsset.h"
+#include "NiagaraDataChannel_Global.h"
+#include "NiagaraDataChannelVariable.h"
 #include "NiagaraEditorUtilities.h"
+#include "NiagaraEffectType.h"
+#include "NiagaraGraph.h"
+#include "NiagaraNodeFunctionCall.h"
+#include "NiagaraNodeOutput.h"
 #include "NiagaraParameterStore.h"
 #include "NiagaraRendererProperties.h"
 #include "NiagaraScript.h"
+#include "NiagaraScriptSource.h"
+#include "NiagaraSpriteRendererProperties.h"
 #include "NiagaraSystem.h"
 #include "NiagaraSystemFactoryNew.h"
 #include "PhysicsProxy/GeometryCollectionPhysicsProxy.h"
 #include "PlayInEditorDataTypes.h"
 #include "UnrealEdGlobals.h"
 #include "UObject/Package.h"
+#include "UObject/UnrealType.h"
 #include "UnrealClient.h"
 #include "WorldFireballProjectile.h"
 #include "WorldInteractionSubsystem.h"
+#include "WorldLooseDebrisConfig.h"
+#include "ViewModels/Stack/NiagaraParameterHandle.h"
+#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 
 namespace
 {
@@ -140,6 +155,120 @@ UNiagaraSystem* CreateOrLoadNiagaraSystemFromEmitters(
 	return System;
 }
 
+UNiagaraEffectType* CreateOrLoadNiagaraEffectType(const FString& PackagePath)
+{
+	if (UNiagaraEffectType* Existing = LoadObject<UNiagaraEffectType>(
+		nullptr,
+		*MakeObjectPath(PackagePath)))
+	{
+		return Existing;
+	}
+	UPackage* Package = CreatePackage(*PackagePath);
+	if (!Package)
+	{
+		return nullptr;
+	}
+	UNiagaraEffectType* EffectType = NewObject<UNiagaraEffectType>(
+		Package,
+		UNiagaraEffectType::StaticClass(),
+		FName(*FPackageName::GetLongPackageAssetName(PackagePath)),
+		RF_Public | RF_Standalone | RF_Transactional);
+	if (EffectType)
+	{
+		FAssetRegistryModule::AssetCreated(EffectType);
+		Package->MarkPackageDirty();
+	}
+	return EffectType;
+}
+
+UNiagaraDataChannelAsset* CreateOrLoadLooseDebrisDataChannel(const FString& PackagePath)
+{
+	UNiagaraDataChannelAsset* Asset = LoadObject<UNiagaraDataChannelAsset>(
+		nullptr,
+		*MakeObjectPath(PackagePath));
+	if (!Asset)
+	{
+		UPackage* Package = CreatePackage(*PackagePath);
+		if (!Package)
+		{
+			return nullptr;
+		}
+		Asset = NewObject<UNiagaraDataChannelAsset>(
+			Package,
+			UNiagaraDataChannelAsset::StaticClass(),
+			FName(*FPackageName::GetLongPackageAssetName(PackagePath)),
+			RF_Public | RF_Standalone | RF_Transactional);
+		if (!Asset)
+		{
+			return nullptr;
+		}
+		FAssetRegistryModule::AssetCreated(Asset);
+		Package->MarkPackageDirty();
+	}
+
+	UNiagaraDataChannel_Global* Channel = Cast<UNiagaraDataChannel_Global>(Asset->Get());
+	if (!Channel)
+	{
+		Channel = NewObject<UNiagaraDataChannel_Global>(
+			Asset,
+			UNiagaraDataChannel_Global::StaticClass(),
+			TEXT("LooseDebrisGlobalChannel"),
+			RF_Transactional);
+		FObjectProperty* DataChannelProperty = FindFProperty<FObjectProperty>(
+			UNiagaraDataChannelAsset::StaticClass(),
+			TEXT("DataChannel"));
+		if (!DataChannelProperty || !Channel)
+		{
+			return nullptr;
+		}
+		DataChannelProperty->SetObjectPropertyValue_InContainer(Asset, Channel);
+	}
+
+	FArrayProperty* VariablesProperty = FindFProperty<FArrayProperty>(
+		UNiagaraDataChannel::StaticClass(),
+		TEXT("ChannelVariables"));
+	if (!VariablesProperty)
+	{
+		return nullptr;
+	}
+	FScriptArrayHelper Variables(VariablesProperty, VariablesProperty->ContainerPtrToValuePtr<void>(Channel));
+	Variables.EmptyValues();
+	const auto AddVariable = [&Variables](const FNiagaraTypeDefinition& Type, const FName Name)
+	{
+		const int32 Index = Variables.AddValue();
+		FNiagaraDataChannelVariable* Variable =
+			reinterpret_cast<FNiagaraDataChannelVariable*>(Variables.GetRawPtr(Index));
+		Variable->SetType(Type);
+		Variable->SetName(Name);
+	};
+	AddVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("EventId"));
+	AddVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("SourceId"));
+	AddVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("SourceType"));
+	AddVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ShapeType"));
+	AddVariable(FNiagaraTypeDefinition::GetPositionDef(), TEXT("Start"));
+	AddVariable(FNiagaraTypeDefinition::GetPositionDef(), TEXT("End"));
+	AddVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("Direction"));
+	AddVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("SourceVelocity"));
+	AddVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("Radius"));
+	AddVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("Strength"));
+	AddVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("UpwardLift"));
+	AddVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("Duration"));
+	AddVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("FalloffExponent"));
+	AddVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("SwirlStrength"));
+
+	if (FBoolProperty* KeepPreviousProperty = FindFProperty<FBoolProperty>(
+		UNiagaraDataChannel::StaticClass(),
+		TEXT("bKeepPreviousFrameData")))
+	{
+		KeepPreviousProperty->SetPropertyValue_InContainer(Channel, true);
+	}
+	Channel->PostEditChange();
+	Asset->PostEditChange();
+	Asset->MarkPackageDirty();
+	Asset->GetOutermost()->SetDirtyFlag(true);
+	return Asset;
+}
+
 void GetAllEmitterScripts(
 	const FVersionedNiagaraEmitterData& EmitterData,
 	TArray<UNiagaraScript*>& OutScripts)
@@ -182,6 +311,124 @@ int32 SetRapidIterationValue(
 		}
 	}
 	return MatchCount;
+}
+
+template <typename TValue>
+void SetNiagaraUserParameter(
+	UNiagaraSystem& System,
+	const TCHAR* ParameterName,
+	const TValue& Value)
+{
+	const FNiagaraVariable Parameter(
+		FNiagaraTypeDefinition::Get<TValue>(),
+		FName(*FString::Printf(TEXT("User.%s"), ParameterName)));
+	System.GetExposedParameters().SetParameterValue(Value, Parameter, true);
+}
+
+void SetNiagaraUserPositionParameter(
+	UNiagaraSystem& System,
+	const TCHAR* ParameterName,
+	const FVector& Value)
+{
+	System.GetExposedParameters().SetPositionParameterValue(
+		Value,
+		FName(*FString::Printf(TEXT("User.%s"), ParameterName)),
+		true);
+}
+
+bool BindNiagaraModuleInputToUserParameter(
+	UNiagaraSystem& System,
+	FVersionedNiagaraEmitterData& EmitterData,
+	const TCHAR* ModuleToken,
+	const TCHAR* InputName,
+	const FNiagaraTypeDefinition& InputType,
+	const TCHAR* UserParameterName,
+	UNiagaraNodeFunctionCall* ExplicitFunctionCall = nullptr)
+{
+	UNiagaraScriptSource* Source = Cast<UNiagaraScriptSource>(EmitterData.GraphSource);
+	if (!Source || !Source->NodeGraph)
+	{
+		return false;
+	}
+
+	TArray<UNiagaraNodeFunctionCall*> FunctionCalls;
+	Source->NodeGraph->GetNodesOfClass(FunctionCalls);
+	UNiagaraNodeFunctionCall* FunctionCall = ExplicitFunctionCall;
+	for (UNiagaraNodeFunctionCall* Node : FunctionCalls)
+	{
+		if (FunctionCall)
+		{
+			break;
+		}
+		if (!Node || !Node->FunctionScript)
+		{
+			continue;
+		}
+		const FString Token(ModuleToken);
+		if (Node->GetFunctionName().Equals(Token) ||
+			Node->FunctionScript->GetName().Equals(Token) ||
+			Node->FunctionScript->GetPathName().Contains(Token) ||
+			Node->FunctionScript->GetPathName().Contains(
+				FString::Printf(TEXT("/%s.%s"), ModuleToken, ModuleToken)))
+		{
+			FunctionCall = Node;
+			break;
+		}
+	}
+	if (!FunctionCall)
+	{
+		return false;
+	}
+
+	const FNiagaraParameterHandle ModuleInput =
+		FNiagaraParameterHandle::CreateModuleParameterHandle(FName(InputName));
+	const FNiagaraParameterHandle AliasedInput =
+		FNiagaraParameterHandle::CreateAliasedModuleParameterHandle(ModuleInput, FunctionCall);
+	const FNiagaraVariable InputVariable(InputType, ModuleInput.GetParameterHandleString());
+	const TOptional<FNiagaraVariableMetaData> InputMetaData =
+		FunctionCall->GetNiagaraGraph()->GetMetaData(InputVariable);
+	const FGuid InputVariableGuid = InputMetaData.IsSet()
+		? InputMetaData->GetVariableGuid()
+		: FGuid();
+	UEdGraphPin& OverridePin =
+		FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+			*FunctionCall,
+			AliasedInput,
+			InputType,
+			InputVariableGuid,
+			FGuid());
+	if (!OverridePin.LinkedTo.IsEmpty())
+	{
+		TArray<UEdGraphNode*> LinkedNodes;
+		for (UEdGraphPin* LinkedPin : OverridePin.LinkedTo)
+		{
+			if (LinkedPin && LinkedPin->GetOwningNode())
+			{
+				LinkedNodes.AddUnique(LinkedPin->GetOwningNode());
+			}
+		}
+		OverridePin.BreakAllPinLinks();
+		for (UEdGraphNode* LinkedNode : LinkedNodes)
+		{
+			if (LinkedNode && LinkedNode != OverridePin.GetOwningNode() &&
+				LinkedNode->GetGraph() == OverridePin.GetOwningNode()->GetGraph())
+			{
+				LinkedNode->GetGraph()->RemoveNode(LinkedNode);
+			}
+		}
+	}
+
+	const FNiagaraVariableBase UserParameter(
+		InputType,
+		FName(*FString::Printf(TEXT("User.%s"), UserParameterName)));
+	TSet<FNiagaraVariableBase> KnownParameters;
+	KnownParameters.Add(UserParameter);
+	FNiagaraStackGraphUtilities::SetLinkedParameterValueForFunctionInput(
+		OverridePin,
+		UserParameter,
+		KnownParameters);
+	return OverridePin.LinkedTo.Num() == 1 && OverridePin.LinkedTo[0] &&
+		OverridePin.LinkedTo[0]->PinName == UserParameter.GetName();
 }
 
 void ConfigureFireballNiagaraSystem(UNiagaraSystem& System)
@@ -309,6 +556,676 @@ void ConfigureDirectionalImpactNiagaraSystem(
 		SetRapidIterationValue(*Data, TEXT(".AddVelocityInCone.Cone Axis"), FVector3f(0.95f, 0.0f, 0.3f));
 		SetRapidIterationValue(*Data, TEXT(".SpawnBurst_Instantaneous.Spawn Count"), bChaosBreak ? 5 : 14);
 	}
+}
+
+enum class ELooseDebrisNiagaraPreset : uint8
+{
+	Ambient,
+	Movement,
+	Attack,
+	Landing,
+	Explosion,
+};
+
+bool EnsureLooseDebrisInitialVelocityModule(FVersionedNiagaraEmitterData& EmitterData)
+{
+	UNiagaraScript* VelocityModule = LoadObject<UNiagaraScript>(
+		nullptr,
+		TEXT("/Niagara/Modules/Spawn/Velocity/AddVelocityInCone.AddVelocityInCone"));
+	UNiagaraScriptSource* Source = Cast<UNiagaraScriptSource>(EmitterData.GraphSource);
+	if (!VelocityModule || !Source || !Source->NodeGraph)
+	{
+		return false;
+	}
+
+	TArray<UNiagaraNodeFunctionCall*> FunctionCalls;
+	Source->NodeGraph->GetNodesOfClass(FunctionCalls);
+	if (FunctionCalls.ContainsByPredicate(
+		[VelocityModule](const UNiagaraNodeFunctionCall* Node)
+		{
+			return Node && Node->FunctionScript == VelocityModule;
+		}))
+	{
+		return true;
+	}
+
+	UNiagaraNodeOutput* SpawnOutput = Source->NodeGraph->FindEquivalentOutputNode(
+		ENiagaraScriptUsage::ParticleSpawnScript);
+	if (!SpawnOutput)
+	{
+		SpawnOutput = Source->NodeGraph->FindEquivalentOutputNode(
+			ENiagaraScriptUsage::ParticleSpawnScriptInterpolated);
+	}
+	if (!SpawnOutput)
+	{
+		return false;
+	}
+
+	return FNiagaraStackGraphUtilities::AddScriptModuleToStack(
+		VelocityModule,
+		*SpawnOutput,
+		INDEX_NONE,
+		TEXT("LooseDebrisInitialPush")) != nullptr;
+}
+
+struct FLooseDebrisInteractionForceModules
+{
+	UNiagaraNodeFunctionCall* Repulsion = nullptr;
+	UNiagaraNodeFunctionCall* AttackWake = nullptr;
+};
+
+bool EnsureLooseDebrisInteractionForceModules(
+	UNiagaraSystem& System,
+	FNiagaraEmitterHandle& Handle,
+	FLooseDebrisInteractionForceModules& OutModules)
+{
+	OutModules = FLooseDebrisInteractionForceModules();
+	FVersionedNiagaraEmitterData* EmitterData = Handle.GetEmitterData();
+	UNiagaraScript* PointForceModule = LoadObject<UNiagaraScript>(
+		nullptr,
+		TEXT("/Niagara/Modules/Update/Forces/V2/PointAttractionForce.PointAttractionForce"));
+	UNiagaraScriptSource* Source = EmitterData
+		? Cast<UNiagaraScriptSource>(EmitterData->GraphSource)
+		: nullptr;
+	if (!EmitterData || !PointForceModule || !Source || !Source->NodeGraph)
+	{
+		return false;
+	}
+
+	TArray<UNiagaraNodeFunctionCall*> FunctionCalls;
+	Source->NodeGraph->GetNodesOfClass(FunctionCalls);
+	TArray<UNiagaraNodeFunctionCall*> UntaggedV2Modules;
+	for (UNiagaraNodeFunctionCall* Node : FunctionCalls)
+	{
+		if (!Node || !Node->FunctionScript)
+		{
+			continue;
+		}
+		const FString ModulePath = Node->FunctionScript->GetPathName();
+		if (ModulePath.Contains(TEXT("/V2/PointAttractionForce.")))
+		{
+			if (Node->NodeComment.Equals(TEXT("LooseDebrisRepulsionForce")))
+			{
+				OutModules.Repulsion = Node;
+			}
+			else if (Node->NodeComment.Equals(TEXT("LooseDebrisAttackWakeForce")))
+			{
+				OutModules.AttackWake = Node;
+			}
+			else
+			{
+				UntaggedV2Modules.Add(Node);
+			}
+		}
+		else if (ModulePath.Contains(TEXT("/PointAttractionForce.")))
+		{
+			FNiagaraStackGraphUtilities::SetModuleIsEnabled(*Node, false);
+		}
+	}
+
+	if (!OutModules.Repulsion && !UntaggedV2Modules.IsEmpty())
+	{
+		OutModules.Repulsion = UntaggedV2Modules[0];
+		UntaggedV2Modules.RemoveAt(0);
+		OutModules.Repulsion->Modify();
+		OutModules.Repulsion->NodeComment = TEXT("LooseDebrisRepulsionForce");
+	}
+	if (!OutModules.AttackWake && !UntaggedV2Modules.IsEmpty())
+	{
+		OutModules.AttackWake = UntaggedV2Modules[0];
+		OutModules.AttackWake->Modify();
+		OutModules.AttackWake->NodeComment = TEXT("LooseDebrisAttackWakeForce");
+	}
+
+	UNiagaraNodeOutput* UpdateOutput = Source->NodeGraph->FindEquivalentOutputNode(
+		ENiagaraScriptUsage::ParticleUpdateScript);
+	if (!UpdateOutput)
+	{
+		return false;
+	}
+
+	if (!OutModules.Repulsion)
+	{
+		OutModules.Repulsion = FNiagaraStackGraphUtilities::AddScriptModuleToStack(
+			PointForceModule,
+			*UpdateOutput,
+			0,
+			TEXT("LooseDebrisInteractionForceV2"));
+		if (OutModules.Repulsion)
+		{
+			OutModules.Repulsion->NodeComment = TEXT("LooseDebrisRepulsionForce");
+		}
+	}
+	if (!OutModules.AttackWake)
+	{
+		OutModules.AttackWake = FNiagaraStackGraphUtilities::AddScriptModuleToStack(
+			PointForceModule,
+			*UpdateOutput,
+			1,
+			TEXT("LooseDebrisAttackWakeForceV2"));
+		if (OutModules.AttackWake)
+		{
+			OutModules.AttackWake->NodeComment = TEXT("LooseDebrisAttackWakeForce");
+		}
+	}
+	return OutModules.Repulsion && OutModules.AttackWake;
+}
+
+bool DisableLooseDebrisWindModule(FVersionedNiagaraEmitterData& EmitterData)
+{
+	UNiagaraScriptSource* Source = Cast<UNiagaraScriptSource>(EmitterData.GraphSource);
+	if (!Source || !Source->NodeGraph)
+	{
+		return false;
+	}
+
+	bool bFoundWindModule = false;
+	TArray<UNiagaraNodeFunctionCall*> FunctionCalls;
+	Source->NodeGraph->GetNodesOfClass(FunctionCalls);
+	for (UNiagaraNodeFunctionCall* Node : FunctionCalls)
+	{
+		if (!Node || !Node->FunctionScript ||
+			!Node->FunctionScript->GetPathName().Contains(TEXT("/WindForce.WindForce")))
+		{
+			continue;
+		}
+		FNiagaraStackGraphUtilities::SetModuleIsEnabled(*Node, false);
+		bFoundWindModule = true;
+	}
+	return bFoundWindModule;
+}
+
+bool ConfigureLooseDebrisNiagaraSystem(
+	UNiagaraSystem& System,
+	const ELooseDebrisNiagaraPreset Preset,
+	const FWorldLooseDebrisSettings& Settings,
+	UNiagaraEffectType* EffectType,
+	UMaterialInterface* LeafMaterial,
+	UMaterialInterface* PaperMaterial)
+{
+	bool bConfigurationValid = true;
+	const bool bAmbient = Preset == ELooseDebrisNiagaraPreset::Ambient;
+	const float ParticleLifetime = FMath::Max(
+		1.0f,
+		bAmbient ? Settings.AmbientParticleLifetime : Settings.InteractionParticleLifetime);
+	const float TotalSpawnRate = FMath::Max(
+		0.0f,
+		bAmbient ? Settings.AmbientParticleBudget / ParticleLifetime
+		: Preset == ELooseDebrisNiagaraPreset::Movement ? Settings.MovementInteractionSpawnRate
+		: Preset == ELooseDebrisNiagaraPreset::Attack ? Settings.AttackInteractionSpawnRate
+		: Preset == ELooseDebrisNiagaraPreset::Landing ? Settings.LandingInteractionSpawnRate
+		: Settings.ExplosionInteractionSpawnRate);
+	const float PaperFraction = FMath::Clamp(Settings.PaperParticleFraction, 0.0f, 1.0f);
+	const float ShapeRadius = bAmbient ? Settings.AuthoredAmbientRadius
+		: Preset == ELooseDebrisNiagaraPreset::Movement ? Settings.MovementSpawnRadius
+		: Preset == ELooseDebrisNiagaraPreset::Attack ? Settings.AttackSpawnRadius
+		: Preset == ELooseDebrisNiagaraPreset::Landing ? Settings.LandingSpawnRadius
+		: Settings.ExplosionSpawnRadius;
+	const float InitialSpeed = bAmbient ? 0.0f
+		: Preset == ELooseDebrisNiagaraPreset::Movement ? Settings.MovementInitialSpeed
+		: Preset == ELooseDebrisNiagaraPreset::Attack ? Settings.AttackInitialSpeed
+		: Preset == ELooseDebrisNiagaraPreset::Landing ? Settings.LandingInitialSpeed
+		: Settings.ExplosionInitialSpeed;
+	const FVector3f InitialVelocityAxis = FVector3f(
+		1.0f,
+		0.0f,
+		FMath::Clamp(Settings.InitialVelocityUpwardRatio, 0.0f, 2.0f)).GetSafeNormal();
+	const FVector3f Gravity = FVector3f(
+		0.0f,
+		0.0f,
+		FMath::Min(
+			-1.0f,
+			bAmbient ? Settings.AmbientGravityZ : Settings.InteractionGravityZ));
+	const float LifetimeMin = ParticleLifetime * 0.9f;
+	const float LifetimeMax = ParticleLifetime * 1.1f;
+	SetNiagaraUserParameter(System, TEXT("LeafSpawnRate"), TotalSpawnRate * (1.0f - PaperFraction));
+	SetNiagaraUserParameter(System, TEXT("PaperSpawnRate"), TotalSpawnRate * PaperFraction);
+	SetNiagaraUserParameter(System, TEXT("LifetimeMin"), LifetimeMin);
+	SetNiagaraUserParameter(System, TEXT("LifetimeMax"), LifetimeMax);
+	SetNiagaraUserParameter(System, TEXT("SpawnRadius"), ShapeRadius);
+	SetNiagaraUserParameter(System, TEXT("InitialSpeed"), InitialSpeed);
+	SetNiagaraUserParameter(
+		System,
+		TEXT("InitialVelocityConeAngle"),
+		FMath::Clamp(Settings.InitialVelocityConeAngle, 0.0f, 89.0f));
+	SetNiagaraUserParameter(System, TEXT("InitialVelocityAxis"), InitialVelocityAxis);
+	SetNiagaraUserParameter(System, TEXT("Gravity"), Gravity);
+	SetNiagaraUserPositionParameter(
+		System,
+		TEXT("InteractionForcePosition"),
+		FVector::ZeroVector);
+	SetNiagaraUserParameter(System, TEXT("InteractionForceStrength"), 0.0f);
+	SetNiagaraUserParameter(System, TEXT("InteractionForceRadius"), 1.0f);
+	SetNiagaraUserParameter(
+		System,
+		TEXT("InteractionForceFalloffExponent"),
+		FMath::Clamp(Settings.InteractionForceFalloffExponent, 0.01f, 8.0f));
+	SetNiagaraUserPositionParameter(System, TEXT("AttackWakePosition"), FVector::ZeroVector);
+	SetNiagaraUserParameter(System, TEXT("AttackWakeStrength"), 0.0f);
+	SetNiagaraUserParameter(System, TEXT("AttackWakeRadius"), 1.0f);
+	SetNiagaraUserParameter(
+		System,
+		TEXT("AttackWakeFalloffExponent"),
+		FMath::Clamp(Settings.AttackWakeFalloffExponent, 0.01f, 8.0f));
+	const float InteractionDragScale =
+		FMath::Max(0.0f, Settings.InteractionAerodynamicDragScale);
+	const float InteractionLiftScale =
+		FMath::Clamp(Settings.InteractionLiftContributionScale, 0.0f, 2.0f);
+	SetNiagaraUserParameter(
+		System,
+		TEXT("LeafAerodynamicDrag"),
+		bAmbient ? Settings.AmbientAerodynamicDrag : 1.15f * InteractionDragScale);
+	SetNiagaraUserParameter(
+		System,
+		TEXT("PaperAerodynamicDrag"),
+		bAmbient ? Settings.AmbientAerodynamicDrag : 1.6f * InteractionDragScale);
+	SetNiagaraUserParameter(
+		System,
+		TEXT("LeafLiftContribution"),
+		bAmbient ? 0.0f : 0.85f * InteractionLiftScale);
+	SetNiagaraUserParameter(
+		System,
+		TEXT("PaperLiftContribution"),
+		bAmbient ? 0.0f : 1.4f * InteractionLiftScale);
+	SetNiagaraUserParameter(
+		System,
+		TEXT("RotationalDrag"),
+		bAmbient
+			? FMath::Max(0.0f, Settings.AmbientRotationalDrag)
+			: FMath::Max(0.0f, Settings.InteractionRotationalDrag));
+	SetNiagaraUserParameter(
+		System,
+		TEXT("LeafRotationStrength"),
+		bAmbient ? FMath::Max(0.0f, Settings.AmbientLeafRotationStrength) : 0.85f);
+	SetNiagaraUserParameter(
+		System,
+		TEXT("PaperRotationStrength"),
+		bAmbient ? FMath::Max(0.0f, Settings.AmbientPaperRotationStrength) : 1.2f);
+	SetNiagaraUserParameter(
+		System,
+		TEXT("Restitution"),
+		bAmbient
+			? FMath::Clamp(Settings.AmbientRestitution, 0.0f, 1.0f)
+			: FMath::Clamp(Settings.InteractionRestitution, 0.0f, 1.0f));
+	SetNiagaraUserParameter(
+		System,
+		TEXT("Friction"),
+		bAmbient ? 0.72f : FMath::Clamp(Settings.InteractionFriction, 0.0f, 1.0f));
+	SetNiagaraUserParameter(
+		System,
+		TEXT("StaticFriction"),
+		bAmbient ? 0.88f : FMath::Clamp(Settings.InteractionStaticFriction, 0.0f, 1.0f));
+	SetNiagaraUserParameter(
+		System,
+		TEXT("BounceFriction"),
+		bAmbient ? 0.82f : FMath::Clamp(Settings.InteractionBounceFriction, 0.0f, 1.0f));
+	SetNiagaraUserParameter(
+		System,
+		TEXT("RestStateTime"),
+		bAmbient ? 0.35f : FMath::Max(0.0f, Settings.InteractionRestStateTime));
+	SetNiagaraUserParameter(
+		System,
+		TEXT("StaticFrictionEngagementSpeed"),
+		bAmbient ? 1.0f : FMath::Max(0.0f, Settings.InteractionStaticFrictionEngagementSpeed));
+	SetNiagaraUserParameter(
+		System,
+		TEXT("RestNormalAlignment"),
+		bAmbient ? 0.5f : FMath::Clamp(Settings.InteractionRestNormalAlignment, 0.0f, 1.0f));
+	SetNiagaraUserParameter(
+		System,
+		TEXT("PenetrationBeforeRest"),
+		bAmbient ? 1.0f : FMath::Clamp(Settings.InteractionPenetrationBeforeRest, 0.0f, 1.0f));
+	SetNiagaraUserParameter(
+		System,
+		TEXT("RestingCalmingRate"),
+		bAmbient
+			? FMath::Max(0.0f, Settings.AmbientRestingCalmingRate)
+			: FMath::Max(0.0f, Settings.InteractionRestingCalmingRate));
+	SetNiagaraUserParameter(
+		System,
+		TEXT("BouncingCalmingRate"),
+		bAmbient
+			? FMath::Max(0.0f, Settings.AmbientBouncingCalmingRate)
+			: FMath::Max(0.0f, Settings.InteractionBouncingCalmingRate));
+
+	int32 EmitterIndex = 0;
+	for (FNiagaraEmitterHandle& Handle : System.GetEmitterHandles())
+	{
+		FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+		if (!Data)
+		{
+			continue;
+		}
+		const bool bPaper = (EmitterIndex++ % 2) == 1;
+		FLooseDebrisInteractionForceModules InteractionForceModules;
+		const bool bWindModuleDisabled = DisableLooseDebrisWindModule(*Data);
+		ensureMsgf(
+			bWindModuleDisabled,
+			TEXT("Unable to disable the loose-debris Wind Force module."));
+		bConfigurationValid &= bWindModuleDisabled;
+		if (bAmbient)
+		{
+			const bool bInteractionForceModulesValid = EnsureLooseDebrisInteractionForceModules(
+				System,
+				Handle,
+				InteractionForceModules);
+			ensureMsgf(
+				bInteractionForceModulesValid,
+				TEXT("Unable to add the loose-debris interaction force modules."));
+			bConfigurationValid &= bInteractionForceModulesValid;
+		}
+		if (!bAmbient)
+		{
+			const bool bInitialVelocityModuleValid = EnsureLooseDebrisInitialVelocityModule(*Data);
+			ensureMsgf(
+				bInitialVelocityModuleValid,
+				TEXT("Unable to add the loose-debris initial velocity module."));
+			bConfigurationValid &= bInitialVelocityModuleValid;
+		}
+		const float TypeFraction = bPaper ? PaperFraction : 1.0f - PaperFraction;
+		const float SpawnRate = FMath::Max(0.01f, TotalSpawnRate * TypeFraction);
+		for (UNiagaraRendererProperties* Renderer : Data->GetRenderers())
+		{
+			if (UNiagaraSpriteRendererProperties* SpriteRenderer =
+				Cast<UNiagaraSpriteRendererProperties>(Renderer))
+			{
+				SpriteRenderer->Material = bPaper ? PaperMaterial : LeafMaterial;
+				SpriteRenderer->PostEditChange();
+			}
+		}
+		// Interaction systems are repositioned as fields move. World-space particles
+		// stay where they were emitted instead of being dragged with the component.
+		Data->bLocalSpace = false;
+		Data->SimTarget = ENiagaraSimTarget::CPUSim;
+		Data->CalculateBoundsMode = ENiagaraEmitterCalculateBoundMode::Fixed;
+		const float BoundsRadius = bAmbient ? 1800.0f : 1200.0f;
+		Data->FixedBounds = FBox(
+			FVector(-BoundsRadius, -BoundsRadius, -500.0f),
+			FVector(BoundsRadius, BoundsRadius, bAmbient ? 900.0f : 1400.0f));
+		Data->MaxGPUParticlesSpawnPerFrame = bAmbient ? 256 : 128;
+
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".InitializeParticle.Color"),
+			bPaper
+				? FLinearColor(0.82f, 0.76f, 0.60f, 1.0f)
+				: FLinearColor(0.34f, 0.12f, 0.025f, 1.0f));
+		SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Min"), LifetimeMin);
+		SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Max"), LifetimeMax);
+		SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Mass Min"), bPaper ? 0.25f : 0.45f);
+		SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Mass Max"), bPaper ? 0.45f : 0.75f);
+		SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Min"), bPaper ? 8.0f : 5.0f);
+		SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Max"), bPaper ? 14.0f : 10.0f);
+		SetRapidIterationValue(*Data, TEXT(".ShapeLocation.Sphere Radius"), ShapeRadius);
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".ShapeLocation.Non Uniform Scale"),
+			bAmbient ? FVector3f(1.0f, 1.0f, 0.02f) : FVector3f(1.0f, 1.0f, 0.04f));
+		const int32 SpawnRateMatches =
+			SetRapidIterationValue(*Data, TEXT(".SpawnRate.SpawnRate"), SpawnRate);
+		const int32 SpawnProbabilityMatches =
+			SetRapidIterationValue(*Data, TEXT(".SpawnRate.Spawn Probability"), 1.0f);
+		ensureMsgf(
+			SpawnRateMatches > 0 && SpawnProbabilityMatches > 0,
+			TEXT("Loose-debris population parameters were not found for preset %d."),
+			static_cast<int32>(Preset));
+		SetRapidIterationValue(*Data, TEXT(".GravityForce.Gravity"), Gravity);
+
+		// Interaction particles receive a one-shot spawn push. Continuous wind would
+		// fight gravity for the full 15-second lifetime and leave debris in the sky.
+		SetRapidIterationValue(*Data, TEXT(".WindForce.Wind Speed"), 0.0f);
+		SetRapidIterationValue(*Data, TEXT(".WindForce.Wind Speed"), FVector3f::ZeroVector);
+		SetRapidIterationValue(*Data, TEXT(".WindForce.Wind Speed Scale"), 0.0f);
+		SetRapidIterationValue(*Data, TEXT(".WindForce.Scale"), 0.0f);
+		if (!bAmbient)
+		{
+			const int32 VelocityStrengthMatches = SetRapidIterationValue(
+				*Data,
+				TEXT(".AddVelocityInCone.Velocity Strength"),
+				FMath::Max(0.0f, InitialSpeed));
+			const int32 ConeAngleMatches = SetRapidIterationValue(
+				*Data,
+				TEXT(".AddVelocityInCone.Cone Angle"),
+				FMath::Clamp(Settings.InitialVelocityConeAngle, 0.0f, 89.0f));
+			const int32 ConeAxisMatches = SetRapidIterationValue(
+				*Data,
+				TEXT(".AddVelocityInCone.Cone Axis"),
+				InitialVelocityAxis);
+			if (VelocityStrengthMatches <= 0 || ConeAngleMatches <= 0 || ConeAxisMatches <= 0)
+			{
+				TArray<UNiagaraScript*> Scripts;
+				GetAllEmitterScripts(*Data, Scripts);
+				for (const UNiagaraScript* Script : Scripts)
+				{
+					for (const FNiagaraVariableWithOffset& Variable :
+						Script->RapidIterationParameters.ReadParameterVariables())
+					{
+						if (Variable.GetName().ToString().Contains(TEXT("AddVelocityInCone")))
+						{
+							UE_LOG(
+								LogTemp,
+								Warning,
+								TEXT("Loose debris velocity parameter %s type=%s"),
+								*Variable.GetName().ToString(),
+								*Variable.GetType().GetName());
+						}
+					}
+				}
+			}
+		}
+		const float AerodynamicDrag = bAmbient
+			? FMath::Max(0.0f, Settings.AmbientAerodynamicDrag)
+			: (bPaper ? 1.6f : 1.15f) *
+				FMath::Max(0.0f, Settings.InteractionAerodynamicDragScale);
+		SetRapidIterationValue(*Data, TEXT(".AerodynamicDrag.Aerodynamic Drag"), AerodynamicDrag);
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".AerodynamicDrag.Aerodynamic Rotational Drag"),
+			bAmbient
+				? FMath::Max(0.0f, Settings.AmbientRotationalDrag)
+				: FMath::Max(0.0f, Settings.InteractionRotationalDrag));
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".AerodynamicDrag.Lift Contribution"),
+			bAmbient
+				? 0.0f
+				: (bPaper ? 1.4f : 0.85f) *
+					FMath::Clamp(Settings.InteractionLiftContributionScale, 0.0f, 2.0f));
+		const float RotationStrength = bAmbient
+			? (bPaper
+				? FMath::Max(0.0f, Settings.AmbientPaperRotationStrength)
+				: FMath::Max(0.0f, Settings.AmbientLeafRotationStrength))
+			: (bPaper ? 1.2f : 0.85f);
+		SetRapidIterationValue(*Data, TEXT(".AerodynamicDrag.Rotation Strength"), RotationStrength);
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".Collision.Enable Rest State"),
+			FNiagaraBool(!bAmbient));
+		SetRapidIterationValue(*Data, TEXT(".Collision.Kill On Collision"), FNiagaraBool(false));
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".Collision.Restitution"),
+			bAmbient
+				? FMath::Clamp(Settings.AmbientRestitution, 0.0f, 1.0f)
+				: FMath::Clamp(Settings.InteractionRestitution, 0.0f, 1.0f));
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".Collision.Friction"),
+			bAmbient ? 0.72f : FMath::Clamp(Settings.InteractionFriction, 0.0f, 1.0f));
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".Collision.Static Friction"),
+			bAmbient ? 0.88f : FMath::Clamp(Settings.InteractionStaticFriction, 0.0f, 1.0f));
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".Collision.Friction During a Bounce"),
+			bAmbient ? 0.82f : FMath::Clamp(Settings.InteractionBounceFriction, 0.0f, 1.0f));
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".Collision.Rest State Time Range"),
+			bAmbient ? 0.35f : FMath::Max(0.0f, Settings.InteractionRestStateTime));
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".Collision.Static Friction Engagement Speed"),
+			bAmbient ? 1.0f : FMath::Max(0.0f, Settings.InteractionStaticFrictionEngagementSpeed));
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".Collision.Minimum Collision Normal/Rest Normal Alignment Percentage"),
+			bAmbient ? 0.5f : FMath::Clamp(Settings.InteractionRestNormalAlignment, 0.0f, 1.0f));
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".Collision.Percentage of Penetration Before Rest"),
+			bAmbient ? 1.0f : FMath::Clamp(Settings.InteractionPenetrationBeforeRest, 0.0f, 1.0f));
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".AlignParticlesWithCollisionPlane.Calming Rate When Resting"),
+			bAmbient
+				? FMath::Max(0.0f, Settings.AmbientRestingCalmingRate)
+				: FMath::Max(0.0f, Settings.InteractionRestingCalmingRate));
+		SetRapidIterationValue(
+			*Data,
+			TEXT(".AlignParticlesWithCollisionPlane.Calming Rate When Bouncing"),
+			bAmbient
+				? FMath::Max(0.0f, Settings.AmbientBouncingCalmingRate)
+				: FMath::Max(0.0f, Settings.InteractionBouncingCalmingRate));
+		SetRapidIterationValue(*Data, TEXT(".Collision.Max Number Of Collisions"), 12);
+
+		const TCHAR* SpawnRateParameter = bPaper
+			? TEXT("PaperSpawnRate")
+			: TEXT("LeafSpawnRate");
+		const TCHAR* DragParameter = bPaper
+			? TEXT("PaperAerodynamicDrag")
+			: TEXT("LeafAerodynamicDrag");
+		const TCHAR* LiftParameter = bPaper
+			? TEXT("PaperLiftContribution")
+			: TEXT("LeafLiftContribution");
+		const TCHAR* RotationStrengthParameter = bPaper
+			? TEXT("PaperRotationStrength")
+			: TEXT("LeafRotationStrength");
+		bool bRuntimeBindingsValid = true;
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("SpawnRate"), TEXT("SpawnRate"),
+			FNiagaraTypeDefinition::GetFloatDef(), SpawnRateParameter);
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("InitializeParticle"), TEXT("Lifetime Min"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("LifetimeMin"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("InitializeParticle"), TEXT("Lifetime Max"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("LifetimeMax"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("ShapeLocation"), TEXT("Sphere Radius"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("SpawnRadius"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("GravityForce"), TEXT("Gravity"),
+			FNiagaraTypeDefinition::GetVec3Def(), TEXT("Gravity"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("AerodynamicDrag"), TEXT("Aerodynamic Drag"),
+			FNiagaraTypeDefinition::GetFloatDef(), DragParameter);
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("AerodynamicDrag"), TEXT("Aerodynamic Rotational Drag"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("RotationalDrag"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("AerodynamicDrag"), TEXT("Lift Contribution"),
+			FNiagaraTypeDefinition::GetFloatDef(), LiftParameter);
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("AerodynamicDrag"), TEXT("Rotation Strength"),
+			FNiagaraTypeDefinition::GetFloatDef(), RotationStrengthParameter);
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("Collision"), TEXT("Restitution"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("Restitution"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("Collision"), TEXT("Friction"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("Friction"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("Collision"), TEXT("Static Friction"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("StaticFriction"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("Collision"), TEXT("Friction During a Bounce"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("BounceFriction"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("Collision"), TEXT("Rest State Time Range"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("RestStateTime"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("Collision"), TEXT("Static Friction Engagement Speed"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("StaticFrictionEngagementSpeed"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("Collision"),
+			TEXT("Minimum Collision Normal/Rest Normal Alignment Percentage"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("RestNormalAlignment"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("Collision"), TEXT("Percentage of Penetration Before Rest"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("PenetrationBeforeRest"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("AlignParticlesWithCollisionPlane"),
+			TEXT("Calming Rate When Resting"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("RestingCalmingRate"));
+		bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+			System, *Data, TEXT("AlignParticlesWithCollisionPlane"),
+			TEXT("Calming Rate When Bouncing"),
+			FNiagaraTypeDefinition::GetFloatDef(), TEXT("BouncingCalmingRate"));
+		if (!bAmbient)
+		{
+			bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+				System, *Data, TEXT("AddVelocityInCone"), TEXT("Velocity Strength"),
+				FNiagaraTypeDefinition::GetFloatDef(), TEXT("InitialSpeed"));
+			bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+				System, *Data, TEXT("AddVelocityInCone"), TEXT("Cone Angle"),
+				FNiagaraTypeDefinition::GetFloatDef(), TEXT("InitialVelocityConeAngle"));
+			bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+				System, *Data, TEXT("AddVelocityInCone"), TEXT("Cone Axis"),
+				FNiagaraTypeDefinition::GetVec3Def(), TEXT("InitialVelocityAxis"));
+		}
+		else
+		{
+			bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+				System, *Data, TEXT("/V2/PointAttractionForce."), TEXT("Attractor Position"),
+				FNiagaraTypeDefinition::GetPositionDef(), TEXT("InteractionForcePosition"),
+				InteractionForceModules.Repulsion);
+			bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+				System, *Data, TEXT("/V2/PointAttractionForce."), TEXT("Attraction Strength"),
+				FNiagaraTypeDefinition::GetFloatDef(), TEXT("InteractionForceStrength"),
+				InteractionForceModules.Repulsion);
+			bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+				System, *Data, TEXT("/V2/PointAttractionForce."), TEXT("Attraction Radius"),
+				FNiagaraTypeDefinition::GetFloatDef(), TEXT("InteractionForceRadius"),
+				InteractionForceModules.Repulsion);
+			bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+				System, *Data, TEXT("/V2/PointAttractionForce."), TEXT("Falloff Exponent"),
+				FNiagaraTypeDefinition::GetFloatDef(), TEXT("InteractionForceFalloffExponent"),
+				InteractionForceModules.Repulsion);
+
+			bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+				System, *Data, TEXT("/V2/PointAttractionForce."), TEXT("Attractor Position"),
+				FNiagaraTypeDefinition::GetPositionDef(), TEXT("AttackWakePosition"),
+				InteractionForceModules.AttackWake);
+			bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+				System, *Data, TEXT("/V2/PointAttractionForce."), TEXT("Attraction Strength"),
+				FNiagaraTypeDefinition::GetFloatDef(), TEXT("AttackWakeStrength"),
+				InteractionForceModules.AttackWake);
+			bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+				System, *Data, TEXT("/V2/PointAttractionForce."), TEXT("Attraction Radius"),
+				FNiagaraTypeDefinition::GetFloatDef(), TEXT("AttackWakeRadius"),
+				InteractionForceModules.AttackWake);
+			bRuntimeBindingsValid &= BindNiagaraModuleInputToUserParameter(
+				System, *Data, TEXT("/V2/PointAttractionForce."), TEXT("Falloff Exponent"),
+				FNiagaraTypeDefinition::GetFloatDef(), TEXT("AttackWakeFalloffExponent"),
+				InteractionForceModules.AttackWake);
+		}
+		ensureMsgf(
+			bRuntimeBindingsValid,
+			TEXT("One or more loose-debris runtime Niagara bindings failed for preset %d emitter %d."),
+			static_cast<int32>(Preset),
+			EmitterIndex - 1);
+		bConfigurationValid &= bRuntimeBindingsValid;
+	}
+
+	System.SetEffectType(EffectType);
+	System.SetWarmupTickDelta(1.0f / 30.0f);
+	// Reach the configured steady-state population before the first rendered
+	// frame, so interaction fields disturb existing ground debris immediately.
+	System.SetWarmupTime(bAmbient ? ParticleLifetime : 0.0f);
+	System.ResolveWarmupTickCount();
+	return bConfigurationValid;
 }
 
 int32 ResolveStateMachineIndex(const UAnimInstance* AnimInstance, const int32 FallbackIndex)
@@ -993,6 +1910,91 @@ bool URoverEditorTestLibrary::ConfigurePhysicsWorldNiagaraAssets()
 		*Explosion->GetPathName(),
 		*SurfaceImpact->GetPathName(),
 		*ChaosBreak->GetPathName());
+	return true;
+}
+
+bool URoverEditorTestLibrary::ConfigurePhysicsWorldLooseDebrisAssets()
+{
+	const FString EmitterTemplate = TEXT("/Niagara/DefaultAssets/Templates/Emitters/BlowingParticles");
+	UNiagaraDataChannelAsset* DataChannel = CreateOrLoadLooseDebrisDataChannel(
+		TEXT("/Game/PhysicsWorldDemo/LooseDebris/DataChannels/NDC_LooseDebrisInteraction"));
+	UNiagaraEffectType* EffectType = CreateOrLoadNiagaraEffectType(
+		TEXT("/Game/PhysicsWorldDemo/LooseDebris/EffectTypes/NET_LooseDebris"));
+	UMaterialInterface* LeafMaterial = LoadObject<UMaterialInterface>(
+		nullptr,
+		TEXT("/Game/PhysicsWorldDemo/LooseDebris/Materials/M_LooseDebris_Leaf.M_LooseDebris_Leaf"));
+	UMaterialInterface* PaperMaterial = LoadObject<UMaterialInterface>(
+		nullptr,
+		TEXT("/Game/PhysicsWorldDemo/LooseDebris/Materials/M_LooseDebris_Paper.M_LooseDebris_Paper"));
+	UNiagaraSystem* Ambient = CreateOrLoadNiagaraSystemFromEmitters(
+		TEXT("/Game/PhysicsWorldDemo/LooseDebris/Niagara/Systems/NS_LooseDebris_Ambient"),
+		{EmitterTemplate, EmitterTemplate});
+	UNiagaraSystem* Movement = CreateOrLoadNiagaraSystemFromEmitters(
+		TEXT("/Game/PhysicsWorldDemo/LooseDebris/Niagara/Systems/NS_LooseDebris_Movement"),
+		{EmitterTemplate, EmitterTemplate});
+	UNiagaraSystem* Attack = CreateOrLoadNiagaraSystemFromEmitters(
+		TEXT("/Game/PhysicsWorldDemo/LooseDebris/Niagara/Systems/NS_LooseDebris_Attack"),
+		{EmitterTemplate, EmitterTemplate});
+	UNiagaraSystem* Landing = CreateOrLoadNiagaraSystemFromEmitters(
+		TEXT("/Game/PhysicsWorldDemo/LooseDebris/Niagara/Systems/NS_LooseDebris_Landing"),
+		{EmitterTemplate, EmitterTemplate});
+	UNiagaraSystem* Explosion = CreateOrLoadNiagaraSystemFromEmitters(
+		TEXT("/Game/PhysicsWorldDemo/LooseDebris/Niagara/Systems/NS_LooseDebris_Explosion"),
+		{EmitterTemplate, EmitterTemplate});
+	if (!DataChannel || !EffectType || !LeafMaterial || !PaperMaterial ||
+		!Ambient || !Movement || !Attack || !Landing || !Explosion)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Unable to create all loose debris Niagara assets"));
+		return false;
+	}
+	const UWorldLooseDebrisConfig* LooseDebrisConfig = LoadObject<UWorldLooseDebrisConfig>(
+		nullptr,
+		TEXT("/Game/PhysicsWorldDemo/LooseDebris/Config/DA_WorldLooseDebrisConfig.DA_WorldLooseDebrisConfig"));
+	const FWorldLooseDebrisSettings DefaultSettings;
+	const FWorldLooseDebrisSettings& Settings = LooseDebrisConfig
+		? LooseDebrisConfig->Settings
+		: DefaultSettings;
+
+	bool bNiagaraConfigurationValid = true;
+	bNiagaraConfigurationValid &= ConfigureLooseDebrisNiagaraSystem(
+		*Ambient, ELooseDebrisNiagaraPreset::Ambient, Settings, EffectType, LeafMaterial, PaperMaterial);
+	bNiagaraConfigurationValid &= ConfigureLooseDebrisNiagaraSystem(
+		*Movement, ELooseDebrisNiagaraPreset::Movement, Settings, EffectType, LeafMaterial, PaperMaterial);
+	bNiagaraConfigurationValid &= ConfigureLooseDebrisNiagaraSystem(
+		*Attack, ELooseDebrisNiagaraPreset::Attack, Settings, EffectType, LeafMaterial, PaperMaterial);
+	bNiagaraConfigurationValid &= ConfigureLooseDebrisNiagaraSystem(
+		*Landing, ELooseDebrisNiagaraPreset::Landing, Settings, EffectType, LeafMaterial, PaperMaterial);
+	bNiagaraConfigurationValid &= ConfigureLooseDebrisNiagaraSystem(
+		*Explosion, ELooseDebrisNiagaraPreset::Explosion, Settings, EffectType, LeafMaterial, PaperMaterial);
+	if (!bNiagaraConfigurationValid)
+	{
+		UE_LOG(LogTemp, Error, TEXT("PHYSICS_WORLD_LOOSE_DEBRIS_ASSETS_FAILED runtime Niagara binding validation failed"));
+		return false;
+	}
+
+	for (UNiagaraSystem* System : {Ambient, Movement, Attack, Landing, Explosion})
+	{
+		System->RequestCompile(false);
+		System->MarkPackageDirty();
+		System->GetOutermost()->SetDirtyFlag(true);
+	}
+	for (UNiagaraSystem* System : {Ambient, Movement, Attack, Landing, Explosion})
+	{
+		System->WaitForCompilationComplete();
+	}
+	EffectType->MarkPackageDirty();
+	DataChannel->MarkPackageDirty();
+
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("PHYSICS_WORLD_LOOSE_DEBRIS_ASSETS_OK channel=%s ambient=%s movement=%s attack=%s landing=%s explosion=%s"),
+		*DataChannel->GetPathName(),
+		*Ambient->GetPathName(),
+		*Movement->GetPathName(),
+		*Attack->GetPathName(),
+		*Landing->GetPathName(),
+		*Explosion->GetPathName());
 	return true;
 }
 

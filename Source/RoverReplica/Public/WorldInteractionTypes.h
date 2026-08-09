@@ -28,6 +28,77 @@ enum class EWorldInteractionKind : uint8
 	Environmental,
 };
 
+UENUM(BlueprintType)
+enum class EWorldLightweightInteractionSource : uint8
+{
+	Movement,
+	Attack,
+	Landing,
+	Explosion,
+	Wind,
+	Jump,
+};
+
+UENUM(BlueprintType)
+enum class EWorldLightweightInteractionShape : uint8
+{
+	Sphere,
+	Capsule,
+};
+
+USTRUCT(BlueprintType)
+struct ROVERREPLICA_API FWorldLightweightInteractionField
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight")
+	int32 EventId = 0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight")
+	int32 SourceId = 0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight")
+	EWorldLightweightInteractionSource SourceType = EWorldLightweightInteractionSource::Movement;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight")
+	EWorldLightweightInteractionShape ShapeType = EWorldLightweightInteractionShape::Sphere;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight")
+	TObjectPtr<AActor> SourceActor;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight")
+	FVector Start = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight")
+	FVector End = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight")
+	FVector Direction = FVector::ForwardVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight")
+	FVector SourceVelocity = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight", meta = (ClampMin = "0.0", Units = "cm"))
+	float Radius = 0.0f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight", meta = (ClampMin = "0.0"))
+	float Strength = 0.0f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight", meta = (ClampMin = "0.0"))
+	float UpwardLift = 0.0f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight", meta = (ClampMin = "0.0", Units = "s"))
+	float Duration = 0.0f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight", meta = (ClampMin = "0.01"))
+	float FalloffExponent = 1.0f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "World Interaction|Lightweight")
+	float SwirlStrength = 0.0f;
+
+	FVector GetCenter() const { return (Start + End) * 0.5f; }
+};
+
 USTRUCT(BlueprintType)
 struct ROVERREPLICA_API FWorldInteractionRequest
 {

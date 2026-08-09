@@ -1,7 +1,7 @@
 # 大世界物理交互 Demo 开发规划
 
-> 版本：v0.6.0
-> 日期：2026-08-08
+> 版本：v0.8.0
+> 日期：2026-08-09
 > 定位：大世界表现与交互 / 技术美术（物理方向）作品集垂直切片
 
 ## 1. 目标变更
@@ -24,9 +24,10 @@
 
 1. **输入一致**：近战、投射物、移动、起跳和落地都使用玩家已经掌握的操作，不为物理演示增加孤立按键；
 2. **反馈有层级**：单点命中强调方向与时机，范围爆炸强调影响半径，动态路径强调重量、速度和余振；
-3. **结果可解释**：武器碰撞、表面类型、冲量来源和生命周期均可观察、可调、可回归；
-4. **动态环境可通行**：会晃、会碎不等于体验成立，桥不能塌、碎片不能无限累积、反馈不能抢走玩家控制权；
-5. **规模化有预算**：当前营地只验证交互语言，后续大世界阶段必须补充加载、实例数量、帧时间和内存证据。
+3. **环境状态连续**：落叶、纸片等环境元素先于输入存在，玩家扰动已有状态，而不是每次操作重新生成一份特效；
+4. **结果可解释**：武器碰撞、表面类型、作用范围、冲量来源和生命周期均可观察、可调、可回归；
+5. **动态环境可通行**：会晃、会碎不等于体验成立，桥不能塌、碎片不能无限累积、反馈不能抢走玩家控制权；
+6. **规模化有预算**：当前营地只验证交互语言，后续大世界阶段必须补充加载、实例数量、帧时间和内存证据。
 
 ## 3. 范围判断
 
@@ -60,9 +61,9 @@ Rover Character / Combat
 UWorldInteractionSubsystem
         │
         ├── Surface Resolver（物理材质 / Surface Type）
-        ├── Physics Response（Chaos Field / Geometry Collection）
+        ├── Physics Response（Chaos 刚体 / External Strain / Geometry Collection）
         ├── VFX Response（Niagara）
-        ├── Material Response（Decal / MPC / WPO）
+        ├── Material Response（当前 Decal；MPC / WPO 计划）
         └── World Response（Wind / Water / Foliage）
                     │
                     ▼
@@ -81,7 +82,7 @@ UWorldInteractionSubsystem
 
 - 角色与战斗组件只提交请求，不知道木箱、篝火或贴花 Actor；
 - 可交互 Actor 决定自身状态变化，Subsystem 负责共享反馈和调度；
-- Niagara、材质、Chaos 参数通过 DataAsset、MPC 或 Niagara Parameter Collection 注入；
+- 当前 Niagara、材质和 Chaos 数值通过 DataAsset 与 Niagara User 参数注入；MPC / WPO 属于后续草地与全局风阶段；
 - 所有新资产放入 `Content/PhysicsWorldDemo/`，与 `Content/Rover/` 分离。
 
 ## 5. 分阶段路线
@@ -92,14 +93,14 @@ UWorldInteractionSubsystem
 
 1. 创建交互枚举、请求结构、接口、Subsystem 与 Config；
 2. 添加火球技能输入和投射物，命中后产生标准化请求；
-3. 创建可破坏木箱：生命值、分级破坏、Geometry Collection、木屑反馈；
-4. 建立 Stone/Wood/Metal/Grass 等表面映射；
+3. 创建可破坏木箱：生命值归零后从完整刚体单阶段切换到 Geometry Collection，并触发真实破裂木屑；
+4. 建立 Surface Type 映射框架并完成 Wood 链路，其他表面差异化表现转入 P1；
 5. 添加爆炸 Niagara、Chaos 径向冲击和灼烧贴花；
 6. 建立专项 PIE：验证请求、表面分流、伤害、破坏、贴花生命周期和清理。
 
 当前玩家输入载体已经扩展到四段定向轻击、普通重击、重击·鸣奏、Attack03 飞剑与单段空中攻击。它们用于提供方向、强度、持续时间和垂直冲击四类环境测试向量；完成这些输入后不再继续无边界扩展角色战斗内容。
 
-验收场景：玩家发射火球命中木箱，木箱受伤/破碎，同时产生木屑、爆炸冲击和灼烧痕迹；命中石地时切换为石质反馈且不触发木箱逻辑。
+当前验收场景：玩家发射火球命中木箱，木箱受伤/破碎，同时产生木屑、爆炸冲击和灼烧痕迹。Stone / Metal / Grass 已保留协议槽位，但不把尚未完成的视觉差异写成 P0 成果。
 
 ### P0.5：动态路径原型（当前调优中）
 
@@ -107,7 +108,7 @@ UWorldInteractionSubsystem
 
 当前结构已完成：
 
-- 60 块独立刚体木板，桥面约 `16.77m x 4.00m`；
+- 已记录演示实例为 60 块独立刚体木板，桥面约 `16.77m x 4.00m`；
 - 两端四个桥墩 / 挂点；
 - 每条板缝左右各一组约束，共 `122` 个 Constraint；
 - 双侧挂点用几何力臂抑制宽木板横滚，保留沿桥方向的自然俯仰；
@@ -116,19 +117,46 @@ UWorldInteractionSubsystem
 
 体验验收尚未完成：
 
-- 最新专项测试中，攻击期间没有武器命中、世界交互请求、攻击推进或动画根运动；
-- 但攻击 Recovery 阶段桥体峰值仍约为 `259.5cm/s`，高于落地后的 `119.7cm/s`；
-- 因此“攻击只改变姿态，不应比落地更强烈地扰动桥面”仍是当前最高优先级问题；
+- 最新专项测试中，攻击期间没有武器命中、世界交互请求、额外桥体 Movement Impulse 或动画 Root Motion；角色按设计保留 `0.65` 倍攻击推进；
+- 最新完整专项中攻击 Recovery 峰值为 `303.6cm/s`，落地峰值为 `300.2cm/s`；
+- 单轮已经接近持平，但攻击仍略高，Chaos 多轮波动下尚未形成稳定的“落地更强”层级；
+- 因此“攻击不应比落地更强烈地扰动桥面”仍是当前最高优先级问题；
 - 自动化测试下一步必须增加攻击峰值失败阈值，不能只记录数据后仍输出通过。
+
+### P0.75：常驻地表轻质杂物（规则完成，视觉与性能待验收）
+
+目标：让落叶和纸片成为持续存在的环境状态，并用同一批粒子反馈玩家移动、攻击、起跳、落地和爆炸。
+
+当前规则已完成：
+
+- 一个世界锚定 Region 维持约 `450` 个 Ambient 粒子的稳态预算；
+- 交互只扰动环境中已有粒子，不为移动、攻击、落地或爆炸重新生成 Niagara System；
+- 移动、Attack、Jump、Landing、Explosion 使用独立来源类型和每帧预算；
+- Attack 使用地下 / 后方排斥力解除贴地状态，再用前上方吸引力形成沿刀路的短尾流；
+- Point Force 原点限制在自身半径的 `0.8R` 内，避免强上抬把力源移出覆盖范围；
+- Ambient 粒子落地后保持可再次受力；源码与已重建资产将持续旋转驱动力设为 `0/0`、Rotational Drag 设为 `8`、Restitution 设为 `0`，无头参数验证已通过，最终观感仍待有渲染 PIE；
+- 轻量场不进入标准 Chaos 请求链，不改变木箱、吊桥或角色的真实物理冲量；
+- DataAsset 增加一次性 Schema 迁移，Niagara 模块 / User 参数绑定失败会让资产生成流程失败；
+- 无头 PIE 覆盖静止、走跑、空挥、起跳、落地、爆炸、攻击尾流、空间覆盖、限流与 `interaction_systems=0`。
+
+当前仍未完成：
+
+- 有渲染 PIE 下静止 `15s`、落地再激活和持续自转的最终观感确认；
+- 走 / 跑 / 起跳 / 落地 / 攻击 / 爆炸的固定路线视频与参数快照；
+- Niagara CPU Sim 单区域的固定硬件 p50 / p95 基线；
+- CPU Ambient 与 GPU + Niagara Data Channel 消费的同场景 A/B；
+- 多 Region、World Partition Cell、区域边缘与 LWC 远原点验证。
 
 ### P1：表面语言与环境表现
 
 目标：展示统一环境参数影响不同系统。
 
-1. 篝火：火焰、烟雾、余烬、动态光；
-2. 全局风：统一驱动 Niagara、旗帜、营帐和植被材质；
-3. Chaos Cloth 旗帜与营帐，补充碰撞和极端参数保护；
-4. 调试面板显示风向、风强、活跃粒子和活动物理对象数量。
+1. 完成 Wood / Stone / Metal 的差异化命中、破坏、声音和残留痕迹；
+2. 固化常驻轻质杂物的视觉基线与平台预算；
+3. 篝火：火焰、烟雾、余烬、动态光；
+4. 全局风：统一驱动 Niagara、旗帜、营帐和植被材质；
+5. Chaos Cloth 旗帜与营帐，补充碰撞和极端参数保护；
+6. 调试面板显示风向、风强、活跃粒子和活动物理对象数量。
 
 ### P2：地表与生态交互
 
@@ -144,7 +172,7 @@ UWorldInteractionSubsystem
 目标：用数据证明可扩展性，不只展示一块小营地。
 
 1. PCG 生成树林、草地和石头，并支持营地排除区；
-2. 扩展测试区域尺寸 `[PLACEHOLDER]`，启用 World Partition/Data Layer；
+2. 在首轮流送基线后确定扩展测试区域尺寸，并启用 World Partition / Data Layer；
 3. 配置 HLOD、加载距离与实例化策略；
 4. 记录不同视距下 Actor/实例数量、Game/GPU 帧时间、内存与 Chaos/Niagara 开销；
 5. 给出质量优先与性能优先两套配置对比。
@@ -161,6 +189,7 @@ UWorldInteractionSubsystem
 | 项目 | 结论 | 主要风险 |
 |---|---|---|
 | Niagara 火焰/爆炸 | 可行 | 高质量材质与贴图仍需美术资产和人工调参 |
+| Niagara 常驻地表杂物 | P0 规则已实现 | 当前 CPU Sim 尚未完成 GPU 扩量、多区域与固定硬件性能证据 |
 | Chaos Destruction | 可行 | Fracture、碰撞层级和碎片数量直接影响稳定性与性能 |
 | Chaos Cloth | 可行 | Cloth Asset、权重绘制、碰撞体通常需要编辑器内人工处理 |
 | 表面/贴花反馈 | 高可行 | 需要统一 Physical Material 资产规范与对象池 |
@@ -186,17 +215,18 @@ UWorldInteractionSubsystem
 6. 完整箱与破裂 Geometry Collection 共用逐实例质量语义，世界重力由 `DA_WorldInteractionConfig` 统一下发；
 7. 已增加幂等资产生成、Build 和专项 PIE 验证脚本。
 
-当前 Geometry Collection 已完成结构与运行时验证；4 个 Niagara 功能系统已装配，并由组件级 `OnChaosBreakEvent` 驱动破裂木屑。完整箱与碎片具有统一质量语义；破裂冲量当前以表现可读性为主，不宣称完全按质量缩放。Niagara、木箱材质和灼烧贴花仍处于 P0 视觉质量，不作为最终美术质量交付。
+当前 Geometry Collection 已完成结构与运行时验证；木箱 / 火球链保留 4 套 Niagara 反馈资产，并由组件级 `OnChaosBreakEvent` 驱动真实破裂木屑。Loose Debris 另有 1 套当前活动的 Ambient 常驻系统；Movement / Attack / Landing / Explosion 模板资产仍保留，但运行时不生成。完整箱与碎片具有统一质量语义；2026-08-09 木箱专项重新确认 `80kg`、`-980cm/s²` 和质量相关破裂冲量，但仍包含表现调参，不宣称已经完成严格物理标定。Niagara、木箱材质和灼烧贴花仍处于 P0 视觉质量，不作为最终美术质量交付。
 
-当前玩家可体验三类环境语言：
+当前玩家可体验四类环境语言：
 
 | 玩家行为 | 环境回应 | 当前状态 |
 |---|---|---|
 | 左键近战命中木箱 | 第一刀立即破裂，显示武器 Sweep 和定向碎片反馈 | 已完成 |
 | `Q` 发射火球 | 范围内多个木箱响应，叠加爆炸、木屑和灼烧痕迹 | 已完成 |
 | 站立、走跑、跳跃通过吊桥 | 桥面承重、摆动、衰减并恢复自然弧线 | 结构完成，行为层级调优中 |
+| 静止、走跑、跳跃、攻击、爆炸经过杂物区 | 同一批落叶 / 纸片被扰动，落地后可再次唤醒，攻击沿刀路形成短尾流 | 规则完成，最终视觉与性能验收中 |
 
-下一步顺序调整为：先解决吊桥“攻击扰动 > 落地反馈”的倒挂，并建立自动失败门槛；再打磨 Wood / Stone / Metal 差异化反馈，之后才进入全局风和 Chaos Cloth。
+下一步顺序调整为：先完成轻质杂物旋转静止的有渲染确认，并解决吊桥“攻击扰动 > 落地反馈”的倒挂；随后固化两套自动失败门槛与性能基线，再打磨 Wood / Stone / Metal 差异化反馈，之后才进入全局风和 Chaos Cloth。
 
 ## 8. 对原始需求文档的修订结论
 
@@ -205,7 +235,7 @@ UWorldInteractionSubsystem
 | 以功能清单和约 11 天排期驱动，核心链路可能最后才连通 | 先完成可玩的 P0 垂直切片，再按 P1-P4 扩展 |
 | 关卡内 `BP_InteractionManager` / `BP_ImpactManager` 形成查找式伪单例 | 使用随 World 创建和销毁的 `UWorldInteractionSubsystem` |
 | 技能、木箱、Niagara、贴花彼此直接引用 | 用 `FWorldInteractionRequest` 和 `UPhysicsInteractable` 隔离生产者与响应者 |
-| 缺少请求身份、非法输入保护、生命周期与数量上限 | 请求使用 `FGuid`；校验半径/伤害/冲量；投射物、碎片和贴花均有清理策略 |
+| 缺少请求身份、非法输入保护、生命周期与数量上限 | 请求使用 `FGuid` 做身份追踪；校验半径/伤害/冲量；投射物、碎片和贴花均有清理策略。当前不宣称 Subsystem 已按 `FGuid` 幂等去重 |
 | 验收项多为“看起来有效”，无法回归 | 增加资产生成脚本、专项 PIE、统计计数和明确成功标记 |
 | 100m × 100m 营地直接被称为大世界 | 营地只证明交互闭环；World Partition/HLOD 必须在 P3 扩区并提交测量数据 |
 | 性能描述只有 `stat unit` 等命令，没有测试条件 | 固定硬件、构建配置、相机路线、样本时长和 p50/p95 指标后再下结论 |
@@ -223,6 +253,8 @@ powershell -File Scripts/ValidatePhysicsWorldBoxPhysicsPIE.ps1 -EngineRoot <UE5.
 powershell -File Scripts/ValidatePhysicsWorldMeleeBoxPIE.ps1 -EngineRoot <UE5.8-path>
 powershell -File Scripts/ValidatePhysicsWorldP0PIE.ps1 -EngineRoot <UE5.8-path>
 powershell -File Scripts/ValidatePhysicsWorldRopeBridgePIE.ps1 -EngineRoot <UE5.8-path>
+powershell -File Scripts/ConfigurePhysicsWorldLooseDebris.ps1 -EngineRoot <UE5.8-path>
+powershell -File Scripts/ValidatePhysicsWorldLooseDebrisPIE.ps1 -EngineRoot <UE5.8-path>
 powershell -File Scripts/ValidateRoverPIE.ps1 -EngineRoot <UE5.8-path>
 ```
 
@@ -251,9 +283,21 @@ powershell -File Scripts/ValidateRoverPIE.ps1 -EngineRoot <UE5.8-path>
 - 60 板生成 `122` 个 Constraint，其中 59 条板缝均存在左右两组约束；
 - 四个端点 Frame 和板间距离误差不超过约定阈值，不出现 NaN、断裂或持续能量增长；
 - 站立、走、跑、起跳、落地使用彼此可比较的桥体响应指标，而不是只比较输入冲量；
-- 攻击期间世界交互请求、攻击推进、动画根运动和角色相对脚下木板位移均为零；
+- 攻击期间世界交互请求、动画 Root Motion、CharacterMovement Push Force 和额外桥体 Movement Impulse 均应为零；
+- 攻击推进必须按配置保留并沿攻击方向可观测；当前基线为 `0.65` 倍，相对脚下板前移 `25.8cm`，自动化最低门槛为 `15cm`；
 - 攻击桥体峰值不得高于落地峰值，最终阈值在下一轮基线测试后固化；
 - 离桥 10 秒后桥体速度归零、自然站姿误差不超过 `2deg`，并退出恢复驱动进入 Sleep。
+
+轻质杂物专项验收必须同时证明：
+
+- 静止不持续发布 Movement Field，移动、空挥、起跳、落地与爆炸来源均可观察；
+- Attack Wake 目标位于真实刀路前上方，而不是角色固定朝向；
+- Point Force 地下偏移仍处于作用半径和 `0.8R` 上限内；
+- 每来源限流和每帧预算有效，丢弃计数可观察；
+- 轻量场不会增加标准 Chaos Processed Request；
+- 交互不创建额外 Niagara System，`interaction_systems=0`；
+- 配置资产完成当前 Schema 迁移，模块 / User 参数绑定失败不能输出成功；
+- 有渲染 PIE 额外证明静止 `15s` 后无持续自转，贴地粒子能被下一次交互重新唤醒。
 
 ### 9.2 性能证据模板
 
@@ -266,6 +310,6 @@ P0 只建立采样方法，不凭占位场景宣称已完成优化。正式记�
 | 负载 | 连续火球、同时活动贴花、Chaos 碎片、Niagara 系统数均记录峰值 |
 | 帧数据 | Frame/Game/Render/GPU 的 p50、p95 和峰值，不只截一帧 `stat unit` |
 | 生命周期 | 投射物、贴花、碎片在配置时限后无持续增长 |
-| 预算 | 目标帧率与各线程预算在首次基准采样后填写 `[PLACEHOLDER]`，不得倒推结果 |
+| 预算 | 目标帧率与各线程预算在首次固定硬件基准采样后固化，不得倒推结果 |
 
 P3 的 World Partition/HLOD 验收必须额外记录测试区域尺寸、加载半径、网格数量、Actor/HISM 实例数、内存和流送尖峰；这些证据不能由当前营地关卡替代。
