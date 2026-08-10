@@ -10,6 +10,7 @@
 #include "Editor.h"
 #include "Editor/UnrealEdEngine.h"
 #include "Engine/GameViewportClient.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "Engine/StaticMesh.h"
 #include "FractureEngineFracturing.h"
@@ -43,6 +44,8 @@
 #include "NiagaraSystem.h"
 #include "NiagaraSystemFactoryNew.h"
 #include "PhysicsProxy/GeometryCollectionPhysicsProxy.h"
+#include "PhysicsAssetUtils.h"
+#include "PhysicsEngine/PhysicsAsset.h"
 #include "PlayInEditorDataTypes.h"
 #include "UnrealEdGlobals.h"
 #include "UObject/Package.h"
@@ -555,6 +558,45 @@ void ConfigureDirectionalImpactNiagaraSystem(
 		SetRapidIterationValue(*Data, TEXT(".AddVelocityInCone.Cone Angle"), bChaosBreak ? 72.0f : 52.0f);
 		SetRapidIterationValue(*Data, TEXT(".AddVelocityInCone.Cone Axis"), FVector3f(0.95f, 0.0f, 0.3f));
 		SetRapidIterationValue(*Data, TEXT(".SpawnBurst_Instantaneous.Spawn Count"), bChaosBreak ? 5 : 14);
+	}
+}
+
+void ConfigureWaterSplashNiagaraSystem(UNiagaraSystem& System)
+{
+	for (FNiagaraEmitterHandle& Handle : System.GetEmitterHandles())
+	{
+		FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+		if (!Data)
+		{
+			continue;
+		}
+
+		Data->bLocalSpace = false;
+		const FString Name = Handle.GetName().ToString();
+		if (Name.Contains(TEXT("OmnidirectionalBurst")))
+		{
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Color"), FLinearColor(0.32f, 0.72f, 0.92f, 0.58f));
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Min"), 0.35f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Max"), 0.9f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Min"), 2.5f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Uniform Sprite Size Max"), 7.5f);
+			SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat.Minimum"), 90.0f);
+			SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat.Maximum"), 340.0f);
+			SetRapidIterationValue(*Data, TEXT(".SpawnBurst_Instantaneous.Spawn Count"), 28);
+		}
+		else if (Name.Contains(TEXT("DirectionalBurst")))
+		{
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Color"), FLinearColor(0.5f, 0.82f, 0.98f, 0.72f));
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Min"), 0.42f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Lifetime Max"), 1.05f);
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Sprite Size Min"), FVector2f(2.0f, 6.0f));
+			SetRapidIterationValue(*Data, TEXT(".InitializeParticle.Sprite Size Max"), FVector2f(4.0f, 13.0f));
+			SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat002.Minimum"), 180.0f);
+			SetRapidIterationValue(*Data, TEXT(".RandomRangeFloat002.Maximum"), 520.0f);
+			SetRapidIterationValue(*Data, TEXT(".AddVelocityInCone.Cone Angle"), 34.0f);
+			SetRapidIterationValue(*Data, TEXT(".AddVelocityInCone.Cone Axis"), FVector3f(0.0f, 0.0f, 1.0f));
+			SetRapidIterationValue(*Data, TEXT(".SpawnBurst_Instantaneous.Spawn Count"), 18);
+		}
 	}
 }
 
@@ -1912,6 +1954,33 @@ bool URoverEditorTestLibrary::ConfigurePhysicsWorldNiagaraAssets()
 	return true;
 }
 
+bool URoverEditorTestLibrary::ConfigurePhysicsWorldWaterAssets()
+{
+	UNiagaraSystem* Splash = CreateOrLoadNiagaraSystemFromEmitters(
+		TEXT("/Game/PhysicsWorldDemo/Water/Niagara/NS_RoverWaterSplash"),
+		{
+			TEXT("/Niagara/DefaultAssets/Templates/Emitters/OmnidirectionalBurst"),
+			TEXT("/Niagara/DefaultAssets/Templates/Emitters/DirectionalBurst"),
+		});
+	if (!Splash)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Unable to create the Physics World water splash Niagara asset"));
+		return false;
+	}
+
+	ConfigureWaterSplashNiagaraSystem(*Splash);
+	Splash->RequestCompile(false);
+	Splash->MarkPackageDirty();
+	Splash->GetOutermost()->SetDirtyFlag(true);
+	Splash->WaitForCompilationComplete();
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("PHYSICS_WORLD_WATER_NIAGARA_OK splash=%s"),
+		*Splash->GetPathName());
+	return true;
+}
+
 bool URoverEditorTestLibrary::ConfigurePhysicsWorldLooseDebrisAssets()
 {
 	const FString EmitterTemplate = TEXT("/Niagara/DefaultAssets/Templates/Emitters/BlowingParticles");
@@ -1995,6 +2064,111 @@ bool URoverEditorTestLibrary::ConfigurePhysicsWorldLooseDebrisAssets()
 		*Landing->GetPathName(),
 		*Explosion->GetPathName());
 	return true;
+}
+
+bool URoverEditorTestLibrary::ConfigureRoverWaterAdvancedPhysicsAsset(
+	const FString& SkeletalMeshPath,
+	const FString& PhysicsAssetPackagePath)
+{
+	if (!FPackageName::IsValidLongPackageName(PhysicsAssetPackagePath))
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("Invalid Rover Physics Asset package path: %s"),
+			*PhysicsAssetPackagePath);
+		return false;
+	}
+
+	USkeletalMesh* SkeletalMesh = LoadObject<USkeletalMesh>(nullptr, *SkeletalMeshPath);
+	if (!SkeletalMesh)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Unable to load Rover Skeletal Mesh: %s"), *SkeletalMeshPath);
+		return false;
+	}
+
+	const FString PhysicsAssetObjectPath = MakeObjectPath(PhysicsAssetPackagePath);
+	UPhysicsAsset* PhysicsAsset = LoadObject<UPhysicsAsset>(nullptr, *PhysicsAssetObjectPath);
+	bool bCreatedAsset = false;
+	if (!PhysicsAsset)
+	{
+		UPackage* Package = CreatePackage(*PhysicsAssetPackagePath);
+		if (!Package)
+		{
+			return false;
+		}
+		PhysicsAsset = NewObject<UPhysicsAsset>(
+			Package,
+			*FPackageName::GetLongPackageAssetName(PhysicsAssetPackagePath),
+			RF_Public | RF_Standalone | RF_Transactional);
+		bCreatedAsset = PhysicsAsset != nullptr;
+	}
+	if (!PhysicsAsset)
+	{
+		return false;
+	}
+
+	if (PhysicsAsset->SkeletalBodySetups.IsEmpty())
+	{
+		FPhysAssetCreateParams CreateParams;
+		CreateParams.MinBoneSize = 25.0f;
+		CreateParams.GeomType = EFG_Sphyl;
+		CreateParams.VertWeight = EVW_DominantWeight;
+		CreateParams.bAlwaysUseVertices = true;
+		CreateParams.bIncludeChildBones = true;
+		CreateParams.bAutoOrientToBone = true;
+		CreateParams.bCreateConstraints = false;
+		CreateParams.bWalkPastSmall = true;
+		CreateParams.bBodyForAll = false;
+		CreateParams.bDisableCollisionsByDefault = true;
+
+		FText ErrorMessage;
+		if (!FPhysicsAssetUtils::CreateFromSkeletalMesh(
+			PhysicsAsset,
+			SkeletalMesh,
+			CreateParams,
+			ErrorMessage,
+			false,
+			false))
+		{
+			UE_LOG(
+				LogTemp,
+				Error,
+				TEXT("Unable to generate Rover Physics Asset: %s"),
+				*ErrorMessage.ToString());
+			if (bCreatedAsset)
+			{
+				PhysicsAsset->ClearFlags(RF_Public | RF_Standalone);
+			}
+			return false;
+		}
+	}
+
+	if (bCreatedAsset)
+	{
+		FAssetRegistryModule::AssetCreated(PhysicsAsset);
+	}
+	SkeletalMesh->SetPhysicsAsset(PhysicsAsset);
+	PhysicsAsset->MarkPackageDirty();
+	PhysicsAsset->GetOutermost()->SetDirtyFlag(true);
+	SkeletalMesh->MarkPackageDirty();
+	SkeletalMesh->GetOutermost()->SetDirtyFlag(true);
+
+	UE_LOG(
+		LogTemp,
+		Display,
+		TEXT("ROVER_WATER_ADVANCED_PHYSICS_ASSET_OK mesh=%s physics_asset=%s bodies=%d constraints=%d"),
+		*SkeletalMesh->GetPathName(),
+		*PhysicsAsset->GetPathName(),
+		PhysicsAsset->SkeletalBodySetups.Num(),
+		PhysicsAsset->ConstraintSetup.Num());
+	return !PhysicsAsset->SkeletalBodySetups.IsEmpty();
+}
+
+int32 URoverEditorTestLibrary::GetPhysicsAssetBodyCount(const FString& PhysicsAssetPath)
+{
+	const UPhysicsAsset* PhysicsAsset = LoadObject<UPhysicsAsset>(nullptr, *PhysicsAssetPath);
+	return PhysicsAsset ? PhysicsAsset->SkeletalBodySetups.Num() : 0;
 }
 
 UWorldInteractionSubsystem* URoverEditorTestLibrary::GetWorldInteractionSubsystem(

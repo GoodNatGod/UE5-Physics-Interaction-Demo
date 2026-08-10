@@ -17,7 +17,9 @@ public class RoverReplica : ModuleRules
 			"GeometryCollectionEngine",
 			"MotionWarping",
 			"Niagara",
-			"PhysicsCore"
+			"PhysicsCore",
+			"Water",
+			"WaterAdvanced"
 		});
 	}
 }

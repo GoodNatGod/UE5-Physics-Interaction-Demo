@@ -170,7 +170,7 @@ UWorldInteractionSubsystem
 目标：加入角色和环境的持续接触反馈。
 
 1. 草地 WPO 弯曲与恢复；
-2. Water Plugin 水体、角色进入涟漪和火球命中水花；
+2. Water Plugin / WaterAdvanced 水体：双湖走跑、跳跃、落地、攻击与爆炸 P0 已完成；游泳、浮力、湿身和元素反应待开发；
 3. 火、风、水之间最少一组组合反应；
 4. 统一调试可视化与对象池策略。
 
@@ -201,7 +201,7 @@ UWorldInteractionSubsystem
 | Chaos Cloth | 可行 | Cloth Asset、权重绘制、碰撞体通常需要编辑器内人工处理 |
 | 表面/贴花反馈 | 高可行 | 需要统一 Physical Material 资产规范与对象池 |
 | 草地 WPO | 高可行 | 大范围 MPC/RVT 写入方式需评估精度与成本 |
-| Water | 可行 | 插件依赖、材质成本与角色移动模式需隔离 |
+| Water | 双湖浅水交互 P0 已通过 | WaterAdvanced 为 Experimental；远距离多水域、游泳、浮力与正式 GPU 基线待验证 |
 | PCG | 可行 | 必须准备可用植被资产、碰撞和 Nanite/HISM 策略 |
 | World Partition/HLOD | 可行 | 100m 场景无法形成有说服力的流送与 HLOD 数据 |
 | 长链动态吊桥 | 结构与攻击 / 落地分层已通过 | 真实刀刃 DirectHit、Explosion、多桥性能与最终美术仍待验收 |
@@ -210,7 +210,7 @@ UWorldInteractionSubsystem
 
 ## 7. 当前可玩状态
 
-本机 UE 5.8 插件基线：Niagara 与 PCG 为默认启用；Geometry Collection、Chaos Cloth Asset 与 Water 需要工程显式启用，Water 仍标记为 Experimental。P0 只启用实际需要的 Niagara、Geometry Collection/Chaos Solver 依赖，其他插件随阶段开启。
+本机 UE 5.8 插件基线：Niagara 与 PCG 为默认启用；工程已显式启用 Geometry Collection、Water 与 WaterAdvanced，WaterAdvanced 仍标记为 Experimental；Chaos Cloth 随后续阶段开启。
 
 当前已按以下顺序完成 P0，不先做布料：
 
@@ -221,6 +221,7 @@ UWorldInteractionSubsystem
 5. 已创建开启刚体模拟的可破坏木箱、16 碎片单根簇 Geometry Collection、Physical Material、Niagara 和灼烧贴花；
 6. 完整箱与破裂 Geometry Collection 共用逐实例质量语义，世界重力由 `DA_WorldInteractionConfig` 统一下发；
 7. 已增加幂等资产生成、Build 和专项 PIE 验证脚本。
+8. 已将两个现有 WaterBodyLake 接入 WaterAdvanced Grid2D 浅水模拟，完成走跑、跳跃、落地、攻击和爆炸反馈，并验证 14 Bodies 角色连续 Collider 与跨 Lake 过滤。
 
 当前 Geometry Collection 已完成结构与运行时验证；木箱 / 火球链保留 4 套 Niagara 反馈资产，并由组件级 `OnChaosBreakEvent` 驱动真实破裂木屑。Loose Debris 另有 1 套当前活动的 Ambient 常驻系统；Movement / Attack / Landing / Explosion 模板资产仍保留，但运行时不生成。完整箱与碎片具有统一质量语义；2026-08-09 木箱专项重新确认 `80kg`、`-980cm/s²` 和质量相关破裂冲量，但仍包含表现调参，不宣称已经完成严格物理标定。Niagara、木箱材质和灼烧贴花仍处于 P0 视觉质量，不作为最终美术质量交付。
 

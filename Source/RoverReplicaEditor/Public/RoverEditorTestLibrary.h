@@ -105,6 +105,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Physics World|Niagara")
 	static bool ConfigurePhysicsWorldLooseDebrisAssets();
 
+	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Physics World|Water")
+	static bool ConfigurePhysicsWorldWaterAssets();
+
+	UFUNCTION(BlueprintCallable, Category = "Rover|Editor|Physics World|Water")
+	static bool ConfigureRoverWaterAdvancedPhysicsAsset(
+		const FString& SkeletalMeshPath = TEXT("/Game/Rover/Character/SK_Rover_Male.SK_Rover_Male"),
+		const FString& PhysicsAssetPackagePath = TEXT("/Game/Rover/Character/PHYS_Rover_Male"));
+
+	UFUNCTION(BlueprintPure, Category = "Rover|Editor|Physics World|Water")
+	static int32 GetPhysicsAssetBodyCount(
+		const FString& PhysicsAssetPath = TEXT("/Game/Rover/Character/PHYS_Rover_Male.PHYS_Rover_Male"));
+
 	UFUNCTION(BlueprintPure, Category = "Rover|Editor|Physics World", meta = (WorldContext = "WorldContextObject"))
 	static UWorldInteractionSubsystem* GetWorldInteractionSubsystem(
 		const UObject* WorldContextObject);

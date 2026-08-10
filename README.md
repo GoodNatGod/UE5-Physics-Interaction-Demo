@@ -1,6 +1,6 @@
 # UE5 Open-Area Physics Interaction Demo
 
-**[观看 32 秒实机演示（MP4，约 20 MB）](./Docs/Media/physics-interaction-demo-2026-08-09.mp4)**
+**[观看最新实机演示（MP4，约 57 MB）](./Docs/Media/physics-interaction-demo-2026-08-10.mp4)**
 
 这是一个基于 Unreal Engine 5.8 制作的开放区域物理交互垂直切片。项目保留成熟的第三人称移动与战斗作为玩家输入载体，重点设计的是：玩家怎样用已经掌握的移动、跳跃、近战和火球改变环境，以及环境怎样用重量、方向、范围、余振和恢复过程给出可读反馈。
 
@@ -8,15 +8,15 @@
 |---|---|
 | 作品集方向 | 大世界交互策划 / 技术美术（物理方向） |
 | 当前场景 | 营地交互垂直切片 |
-| 核心案例 | 两种常驻地表叶片（刀路尾流 / 动态边界）、一刀破箱 / 范围爆炸、保留攻击位移的 60 板动态吊桥 |
+| 核心案例 | 两种常驻地表叶片、一刀破箱 / 范围爆炸、60 板动态吊桥、WaterAdvanced 双湖浅水交互 |
 | 我的职责 | 体验规则、反馈分级、参数体系、UE 原型实现、调试与验收 |
-| 技术基线 | Chaos、Geometry Collection、Niagara、Physical Material、Physics Constraint、Editor Scripting、无头 PIE |
+| 技术基线 | Chaos、Geometry Collection、Niagara、Physical Material、Physics Constraint、Water / WaterAdvanced、Niagara Grid2D / Data Channel、Editor Scripting、无头 PIE |
 
 > 当前作品证明的是一套可以演示、调参和回归的环境交互语言，不用 100m 级测试场地直接宣称已经解决“大世界”。World Partition、HLOD、LWC 远原点和多区域性能证据仍属于后续阶段。
 
 ## 我想解决的体验问题
 
-开放区域里的物理效果不能只在技能命中时热闹一下。玩家应该能从环境变化中判断自己做了什么：慢走只轻微拨动地表杂物，奔跑留下更明显的尾流，刀锋沿真实挥砍方向带动落叶，落地体现下坠速度，爆炸表达更大的影响半径；动态桥面则用承重、摆动和衰减告诉玩家脚下并非静态装饰。
+开放区域里的物理效果不能只在技能命中时热闹一下。玩家应该能从环境变化中判断自己做了什么：慢走只轻微拨动地表杂物和浅水，奔跑留下更明显的尾流与波纹，刀锋沿真实挥砍方向带动落叶和水面，落地体现下坠速度，爆炸表达更大的影响半径；动态桥面则用承重、摆动和衰减告诉玩家脚下并非静态装饰。
 
 本项目用四条规则约束所有实现：
 
@@ -34,7 +34,10 @@
 | 站在落叶区域不动 | 常驻总量持续受控；回落、减速与静止参数链已接入 | 场景先于玩家存在，不是循环喷发特效 |
 | 行走 / 奔跑 | 同一批地表杂物被脚步和速度尾流带动，奔跑明显强于行走 | 环境能反映移动强度与方向 |
 | 起跳 / 落地 | 起跳表达蹬地，落地按接触前垂直速度产生更大径向反馈 | 垂直动作具有重量差异 |
+| 在两个 Lake 中走 / 跑 | 角色身体持续推动浅水，奔跑波纹强于行走 | 水面是持续接触层，不是攻击专属特效 |
+| 水中起跳 / 落地 | 起跳产生较轻扰动，落地按下落速度产生更大波纹 | 水面反馈保留垂直动作层级 |
 | 空挥近战 | 刀锋有效帧也会扰动地表，不要求先命中 Actor | 刀路本身就是空间交互输入 |
+| 攻击 / 火球命中水面 | 攻击按刀路注入定向冲击，爆炸产生更大的范围波纹 | 同一战斗输入能驱动固体与连续介质 |
 | 攻击扫过落叶 | 贴地粒子先被掀起，再沿挥砍方向形成短尾流 | 攻击是定向切割，不是圆形爆炸 |
 | 近战命中木箱 | 第一刀立即破裂，碎片继承方向并受质量、阻尼和重力约束 | 武器确实接触了物体 |
 | 发射火球 | 范围内多个木箱分别响应，叠加爆炸、木屑和灼烧痕迹 | 同一协议可以从单点升级为范围事件 |
@@ -47,6 +50,7 @@
 
 - **玩法物理**：木箱和吊桥有真实刚体、质量、碰撞、破坏或通行语义，由 Chaos 和 Physics Constraint 负责；
 - **表现物理**：两种轻质叶片用于放大玩家速度、刀路与冲击，不承担阻挡、伤害和网络权威，由 Niagara 负责。
+- **连续介质反馈**：水面由 WaterAdvanced Grid2D 接收身体连续碰撞和标准化一次性冲击，不反向接管角色移动。
 
 两层共享玩家输入，但不共享强度常量。调高落叶尾流不会让吊桥突然剧烈抖动，调整木箱破裂冲量也不会改变地表杂物密度。
 
@@ -58,9 +62,12 @@ flowchart LR
     C --> E["Surface / Physical Material"]
     C --> F["Chaos 木箱 / 刚体 / 贴花"]
     D --> G["两种常驻地表叶片"]
+    B --> J["Water Ripple Region"]
+    J --> K["WaterAdvanced Grid2D 浅水"]
     H["DataAsset 参数"] --> C
     H --> D
     H --> I["动态吊桥"]
+    H --> J
 ```
 
 ## 案例一：常驻、可反复交互的地表轻质杂物
@@ -157,6 +164,23 @@ rover.combat.DrawAttackTraceDuration <秒>
 
 完整说明见 [物理吊桥系统说明](./Docs/物理吊桥系统说明.md)。
 
+## 案例五：两个现有 Lake 的 WaterAdvanced 浅水交互
+
+主 Demo 保留已经摆好的两个 `WaterBodyLake`，不改 Transform、Spline 或基础材质。每个 Lake 对应一个 `AWorldWaterRippleRegion`，先按目标水体 Bounds 做粗过滤，再使用与插件一致的水面 Trace 确认命中，避免矩形空角和跨 Lake 误触发。
+
+水面输入按行为语义拆成两层：
+
+| 输入层 | 玩家行为 | 实现 |
+|---|---|---|
+| 连续身体碰撞 | 行走、奔跑、持续涉水位移 | WaterAdvanced 读取 `PHYS_Rover_Male` 的 14 个主要身体碰撞体 |
+| 标准化一次性冲击 | 起跳、落地、近战、爆炸 | Region 把 Position / Velocity / Radius 转换后调用 `RegisterImpact` |
+
+排查过程中曾出现“攻击有涟漪、移动没有”的假闭环：攻击链路独立调用 `RegisterImpact`，因此一直有效；角色 SkeletalMesh 原本没有 Physics Asset，WaterAdvanced 无法建立连续身体 Collider。最终补齐 14 Bodies 的 `PHYS_Rover_Male`，并把 Physics Asset 绑定、Body 数量和运行时 `RigidMesh_ShallowWaterCollider` 标签写进专项验证，不再只证明“请求已经发出”。
+
+当前玩家跟随浅水窗口为 `2400cm / 512`，停止交互后保持 `15s`。走跑、起跳、落地、攻击和爆炸都有独立的速度、半径与限频参数，统一放在 `DA_WorldWaterRippleConfig`；调强攻击水面不会顺带放大移动波纹，也不会修改角色跳跃高度。
+
+完整拆解、参数、失败复盘和面试讲解见 [2026-08-10 WaterAdvanced 双湖交互设计日志](./Docs/InteractionDesignLog-2026-08-10-WaterAdvanced.zh-CN.md) 与 [鸣潮水面复刻实现方案](./Docs/鸣潮水面复刻实现方案.md)。
+
 ## 这次迭代纠正了什么
 
 | 表现问题 | 原因 | 处理 |
@@ -173,6 +197,7 @@ rover.combat.DrawAttackTraceDuration <秒>
 | 编辑器里调试形状总是显示 | 编辑器默认 CVar 强制开启，无法跟随 DataAsset | 两个 CVar 改为 `-1/0/1` 三态，并用 `Caps Lock` 同步切换 |
 | 吊桥实例参数与共享配置分叉 | 关卡 `OverrideSettings` 长期成为隐形权威 | 迁移 58 字段到共享 DataAsset，CDO / 实例关闭 Override，专项验证比较完整 Struct |
 | 重击·鸣奏收招短暂闪回站立 | Montage Blend Out 太短 | Blend Out 与 Trigger Time 从 `0.15s` 调到 `0.25s`，给全身过渡留出混合时间 |
+| 攻击水面有效但走跑无反馈 | 自动化只验证 `RegisterImpact`，角色 Mesh 没有 Physics Asset，连续 Collider 未建立 | 生成 14 Bodies 的 Physics Asset，并验证运行时 Collider 标签 |
 
 这些修复的共同标准是：不靠缩短寿命或隐藏对象掩盖问题，而是找到输入、空间覆盖、能量来源和生命周期之间的真实矛盾。
 
@@ -182,6 +207,7 @@ rover.combat.DrawAttackTraceDuration <秒>
 |---|---|
 | `DA_WorldLooseDebrisConfig` | 常驻密度、走跑、攻击尾流、跳跃 / 落地、爆炸、阻尼与静止 |
 | `DA_WorldInteractionConfig` | 世界重力、火球、爆炸、木箱、表面反馈、贴花和吊桥 |
+| `DA_WorldWaterRippleConfig` | 水面接收开关、走跑 / 跳跃 / 攻击 / 爆炸映射、半径、限频和浅水预算 |
 | `DA_RoverCombatConfig` | 武器 Active 时机、Trace、攻击方向与环境请求强度 |
 | `Caps Lock` | 游戏内同步开关武器 Sweep 与 Loose Debris 力场；只改变绘制 |
 | `pw.LooseDebris.DrawFields -1/0/1` | `-1` 跟随 `bDrawDebugFields`，`0` 强制关闭，`1` 强制开启 |
@@ -200,6 +226,7 @@ rover.combat.DrawAttackTraceDuration <秒>
 | 木箱专项 | 一刀破坏、质量 / 重力、GC 接管、表面解析和清理 |
 | 吊桥专项 | 板数、约束数、误差、承重、恢复和输入来源诊断 |
 | Loose Debris 专项 | 静止不发场、移动 / 空挥 / 跳跃 / 落地 / 爆炸、攻击尾流、覆盖、限流、`interaction_systems=0` |
+| WaterAdvanced 双湖专项 | 子系统 / Grid2D、双 Lake 绑定、Collider 标签、走跑 / 跳跃 / 攻击 / 爆炸、跨 Region 过滤 |
 | 视觉检查 | 密度、方向、穿地、持续旋转、落地再激活、走跑和落地强度层级 |
 | 性能检查 | Niagara Debugger、`stat Niagara`、Insights、固定路线的 p50 / p95；尚待正式基线 |
 
@@ -213,6 +240,17 @@ rover.combat.DrawAttackTraceDuration <秒>
 | `ValidatePhysicsWorldRopeBridgePIE.ps1` | 共享配置一致；`60` 板 / `122` 约束；Attack `90.2cm/s`、Landing `309.3cm/s`、比值 `0.292`；相对推进 `18.3cm`；恢复 `0/0` | 通过 |
 | `ValidateRoverPIE.ps1` | GameMode、Pawn、运行时 Input Context 激活与跳跃冒烟 | 通过 |
 
+2026-08-10 水面专项记录：
+
+| 脚本 | 关键证据 | 结果 |
+|---|---|---|
+| `BuildEditor.ps1` | Water / WaterAdvanced Runtime 与 PhysicsUtilities Editor 工具编译 | 通过 |
+| `ValidatePhysicsWorldDualLakeDemoAssets.ps1` | 1 WaterZone、2 WaterBodyLake、2 Region；Physics Asset 绑定与 14 Bodies | 通过 |
+| `ValidatePhysicsWorldDualLakePIE.ps1` | `2400/512` Grid；`rover_collider=14bodies/tagged`；Movement / Jump / Attack / Landing / Explosion 各 2；跨区 0 | 通过 |
+| 人工有渲染 PIE | 走跑、跳跃、落地和攻击均能驱动现有 Lake 水面 | 通过 |
+
+角色综合 `ValidateRoverPIE.ps1` 当前仍会停在既有 ground jump 位移阈值；水面迭代没有修改已经调好的跳跃参数，该失败与 WaterAdvanced 无关。
+
 这些数字证明协议、行为层级和资产状态可回归，不等于最终 VFX 画面、吊桥美术观感或大世界性能已经验收。
 
 最新分阶段规划见 [Roadmap](./Docs/Roadmap.zh-CN.md)。
@@ -225,6 +263,7 @@ rover.combat.DrawAttackTraceDuration <秒>
 - 当前 CPU Sim P0 不等于已经证明 GPU 大规模方案；
 - Wood 的物理和反馈链最完整，其他表面仍需差异化美术与声音；
 - 吊桥攻击 / 落地自动层级已通过，但真实刀刃直击、Explosion、多桥性能和有渲染体验仍待验收；
+- WaterAdvanced 双湖局部浅水交互已完成 P0，但游泳、浮力、湿身、元素组合和远距离多水域性能仍待开发；
 - 无头 PIE 没有像素证据，最终 VFX 观感必须在有渲染运行中确认；
 - 当前没有提交多 Cell、远原点、World Partition / HLOD 和固定硬件性能结论。
 
@@ -232,11 +271,11 @@ rover.combat.DrawAttackTraceDuration <秒>
 
 | 输入 | 功能 |
 |---|---|
-| `WASD` | 移动并影响地表轻质杂物 |
+| `WASD` | 移动并影响地表轻质杂物；进入 Lake 后持续推动浅水 |
 | 鼠标 | 自由观察 |
 | `Left Shift` | 奔跑 |
-| `Space` | 跳跃 / 二段跳，起跳与落地发布独立环境反馈 |
-| 鼠标左键 | 近战；刀锋有效帧同时影响木箱与常驻杂物 |
+| `Space` | 跳跃 / 二段跳，起跳与落地发布独立环境和水面反馈 |
+| 鼠标左键 | 近战；刀锋有效帧同时影响木箱、常驻杂物与水面 |
 | `WASD + 攻击` | 每段重新选择攻击方向 |
 | `Q` | 发射火球并产生范围爆炸 |
 | `Caps Lock` | 游戏内同步开关武器碰撞与轻质杂物力场可视化 |
@@ -245,7 +284,10 @@ rover.combat.DrawAttackTraceDuration <秒>
 
 - [2026-08-09：Niagara 常驻地表杂物交互复盘](./Docs/InteractionDesignLog-2026-08-09.zh-CN.md)
 - [2026-08-09：吊桥攻击响应分层复盘](./Docs/InteractionDesignLog-2026-08-09-RopeBridgeAttackResponse.zh-CN.md)
+- [2026-08-10：WaterAdvanced 双湖浅水交互复盘](./Docs/InteractionDesignLog-2026-08-10-WaterAdvanced.zh-CN.md)
 - [Niagara 地表轻质杂物交互系统说明](./Docs/Niagara地表轻质杂物交互系统方案.md)
+- [鸣潮水面复刻实现方案](./Docs/鸣潮水面复刻实现方案.md)
+- [可交互水面前置调研](./Docs/可交互水面调研文档.md)
 - [2026-08-08：扩展交互输入系统](./Docs/InteractionDesignLog-2026-08-08.zh-CN.md)
 - [2026-08-07：动态吊桥结构与体验调优](./Docs/InteractionDesignLog-2026-08-07.zh-CN.md)
 - [物理吊桥系统说明](./Docs/物理吊桥系统说明.md)
@@ -275,6 +317,9 @@ powershell -File .\Scripts\ValidatePhysicsWorldLooseDebrisPIE.ps1 -EngineRoot <U
 powershell -File .\Scripts\ValidatePhysicsWorldBoxPhysicsPIE.ps1 -EngineRoot <UE5.8-path>
 powershell -File .\Scripts\ValidatePhysicsWorldP0PIE.ps1 -EngineRoot <UE5.8-path>
 powershell -File .\Scripts\ValidatePhysicsWorldRopeBridgePIE.ps1 -EngineRoot <UE5.8-path>
+powershell -File .\Scripts\ConfigurePhysicsWorldDualLakeDemo.ps1 -EngineRoot <UE5.8-path>
+powershell -File .\Scripts\ValidatePhysicsWorldDualLakeDemoAssets.ps1 -EngineRoot <UE5.8-path>
+powershell -File .\Scripts\ValidatePhysicsWorldDualLakePIE.ps1 -EngineRoot <UE5.8-path>
 powershell -File .\Scripts\ValidateRoverPIE.ps1 -EngineRoot <UE5.8-path>
 ```
 

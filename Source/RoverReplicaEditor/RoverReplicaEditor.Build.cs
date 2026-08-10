@@ -25,6 +25,7 @@ public class RoverReplicaEditor : ModuleRules
 			"Kismet",
 			"Niagara",
 			"NiagaraEditor",
+			"PhysicsUtilities",
 			"UnrealEd"
 		});
 	}
