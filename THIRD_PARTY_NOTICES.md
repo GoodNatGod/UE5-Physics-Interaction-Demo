@@ -1,0 +1,21 @@
+# Third-Party Asset Notice
+
+This repository is a source-code and technical-documentation portfolio for an Unreal Engine 5.8 physics interaction demo.
+
+## Assets not included
+
+The local playable project uses separately obtained third-party character, animation, texture, weapon, and environment-kit assets. Their distribution terms prohibit publishing the source files to public download locations. The original FBX files, all imported or derived assets under `Content/Rover/`, and the local `Content/ModularLostRuinKit/` package are therefore intentionally excluded from this repository.
+
+The local showcase map and any Geometry Collection that embeds geometry from the separately licensed environment kit are also excluded. Public editor scripts document how the interaction assembly is produced when the owner supplies those assets locally; they do not redistribute the source geometry.
+
+Screenshots and videos rendered from the local project may be used for portfolio presentation where permitted by the source asset terms, but they do not grant any right to redistribute the underlying assets.
+
+## Trademarks and engine content
+
+- This is an unofficial learning and portfolio project and is not affiliated with or endorsed by Kuro Games.
+- Wuthering Waves, its characters, and related marks belong to their respective rights holders.
+- Unreal Engine and related engine content are subject to Epic Games' applicable license terms.
+
+## Repository code
+
+No general open-source license is granted by this repository. The original C++, Python, PowerShell, documentation, and project-specific physics content are published for portfolio review only unless the repository owner grants separate permission.

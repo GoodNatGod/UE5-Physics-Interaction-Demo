@@ -22,3 +22,22 @@ Saved/
 .DS_Store
 Thumbs.db
 
+# Local collaboration state
+.workbuddy/
+AGENTS.md
+
+# Generated IDE files
+*.slnx
+.vsconfig
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Separately licensed third-party content used by the local playable demo
+Content/Rover/
+Content/ModularLostRuinKit/
+
+# Local showcase assembly references separately licensed environment geometry
+Content/PhysicsWorldDemo/Maps/L_PhysicsWorldDemo_Lumen.umap
+Content/PhysicsWorldDemo/GeometryCollections/GC_PW_WoodenBox1_Fractured.uasset

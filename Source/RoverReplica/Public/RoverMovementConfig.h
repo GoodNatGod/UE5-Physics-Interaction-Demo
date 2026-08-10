@@ -1,0 +1,285 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Engine/DataAsset.h"
+#include "RoverMovementConfig.generated.h"
+
+USTRUCT(BlueprintType)
+struct ROVERREPLICA_API FRoverMovementSettings
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Collision", meta = (ClampMin = "1.0"))
+	float CapsuleRadius = 34.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Collision", meta = (ClampMin = "1.0"))
+	float CapsuleHalfHeight = 90.0f;
+
+	// [PLACEHOLDER] Keep physics props movable without inheriting CharacterMovement's very large defaults.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	bool bEnablePhysicsInteraction = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	bool bPhysicsInteractionPushForceScaledToMass = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	bool bPhysicsInteractionTouchForceScaledToMass = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	bool bPhysicsInteractionScalePushForceToVelocity = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "1.0", Units = "kg"))
+	float PhysicsInteractionCharacterMassKg = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "0.0"))
+	float PhysicsInteractionStandingDownwardForceScale = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "0.0"))
+	float PhysicsInteractionInitialPushForceFactor = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "0.0"))
+	float PhysicsInteractionPushForceFactor = 20000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "0.0"))
+	float PhysicsInteractionTouchForceFactor = 0.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	float PhysicsInteractionMinTouchForce = -1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction")
+	float PhysicsInteractionMaxTouchForce = 50.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Interaction", meta = (ClampMin = "0.0"))
+	float PhysicsInteractionRepulsionForce = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground", meta = (ClampMin = "0.0"))
+	float WalkSpeed = 150.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground", meta = (ClampMin = "0.0"))
+	float RunSpeed = 400.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground", meta = (ClampMin = "0.0"))
+	float SprintSpeed = 600.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground", meta = (ClampMin = "0.0"))
+	float MaxAcceleration = 1800.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground", meta = (ClampMin = "0.0"))
+	float BrakingDeceleration = 1400.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground", meta = (ClampMin = "0.0"))
+	float GroundFriction = 8.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground", meta = (ClampMin = "0.0"))
+	float RotationRate = 720.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Movement End", meta = (ClampMin = "0.0"))
+	float MoveStopWalkMinSpeed = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Movement End", meta = (ClampMin = "0.0"))
+	float MoveStopRunMinSpeed = 300.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Movement End", meta = (ClampMin = "0.0"))
+	float MoveStopSprintMinSpeed = 450.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Movement End", meta = (ClampMin = "0.1"))
+	float MoveStopPendingTimeout = 0.75f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Movement End", meta = (ClampMin = "0.1"))
+	float MoveStopActiveTimeout = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Movement End", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float MoveStopResumeNormalizedTime = 0.52f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Movement End", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float MoveStopWalkResumeNormalizedTime = 0.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.0"))
+	float TurnInPlaceMaxSpeed = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float TurnInPlaceAngle = 90.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.0"))
+	float RunTurnbackMinSpeed = 450.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float RunTurnbackAngle = 165.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.0"))
+	float RunTurnbackInertiaDistance = 24.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.05"))
+	float RunTurnbackInertiaDuration = 0.16f;
+
+	// Normalized Run_Turnback progress that releases movement and blends back to locomotion.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float RunTurnbackResumeNormalizedTime = 0.70f;
+
+	// Full-body crossfade from Run_Turnback into the resumed locomotion pose.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.05", ClampMax = "0.5", ForceUnits = "s"))
+	float RunTurnbackBlendOutDuration = 0.22f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.0"))
+	float RunTurnbackRecoveryInitialSpeed = 180.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.0"))
+	float RunTurnbackRecoveryAcceleration = 4200.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float GroundTurnRearmAngle = 60.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.1"))
+	float GroundTurnPendingTimeout = 0.75f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ground|Turn", meta = (ClampMin = "0.1"))
+	float GroundTurnActiveTimeout = 3.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Animation|Idle", meta = (ClampMin = "0.0"))
+	float IdleVariationMinTime = 15.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Animation|Idle", meta = (ClampMin = "0.0"))
+	float IdleVariationMaxTime = 30.0f;
+
+	// [PLACEHOLDER] Ignore sub-centimeter foot offsets when choosing the post-attack idle stance.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Animation|Idle", meta = (ClampMin = "0.0"))
+	float IdleFootStanceProjectionTolerance = 0.5f;
+
+	// [PLACEHOLDER] Used for visible idle variations. Post-attack stance selection is
+	// prepared immediately while the full-weight Montage still hides the locomotion pose.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Animation|Idle", meta = (ClampMin = "0.0"))
+	float IdleStanceBlendTime = 0.10f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float InputDeadZone = 0.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AnalogWalkThreshold = 0.4f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float SprintInputThreshold = 0.85f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	bool bUseAnalogWalk = true;
+
+	// [PLACEHOLDER] Retains a readable combat lunge on simulated movement bases without restoring
+	// CharacterMovement's native physics push force.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AttackAdvanceScaleOnSimulatedBase = 0.55f;
+
+	// [PLACEHOLDER] Spreads the same bridge-relative attack displacement over a longer interval.
+	// This reduces the load-transfer spike without changing the authored advance distance.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.05"))
+	float AttackAdvanceDurationScaleOnSimulatedBase = 2.50f;
+
+	// [PLACEHOLDER] Blends the dynamic-base advance from constant speed (0) to a
+	// normalized smooth start/stop profile (1) while preserving total displacement.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AttackAdvanceEaseOnSimulatedBase = 1.0f;
+
+	// [PLACEHOLDER] Prevents CharacterMovement's native blocking-hit push force from
+	// injecting a combat spike into a simulated movement base. Standing load is unchanged.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AttackPhysicsPushScaleOnSimulatedBase = 0.0f;
+
+	// [PLACEHOLDER] Scales only the character's continuous standing load during attacks on a
+	// simulated base. Keep full weight here; the bridge owns its separate combat-response damping.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AttackStandingDownwardForceScaleOnSimulatedBase = 1.0f;
+
+	// [PLACEHOLDER] Blends the character's standing load and native push forces back in
+	// after an attack, avoiding a second landing-like jolt at Montage completion.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat|Dynamic Base", meta = (ClampMin = "0.0", Units = "s"))
+	float AttackPhysicsRestoreDurationOnSimulatedBase = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Air", meta = (ClampMin = "0.0"))
+	float JumpZVelocity = 630.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Air", meta = (ClampMin = "0.1"))
+	float GravityScale = 1.45f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Air", meta = (ClampMin = "0.0"))
+	float SecondJumpZVelocity = 500.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Air", meta = (ClampMin = "0.0"))
+	float SecondJumpHorizontalBoost = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Air", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AirControl = 0.45f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Air", meta = (ClampMin = "0.0"))
+	float AirTurnRate = 180.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Air", meta = (ClampMin = "0.0"))
+	float JumpRunSpeedThreshold = 200.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Air", meta = (ClampMin = "0.0"))
+	float FastFallBlendStartSpeed = 650.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Air", meta = (ClampMin = "0.0"))
+	float FastFallFullSpeed = 800.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landing", meta = (ClampMin = "0.0"))
+	float LightLandingMaxSpeed = 650.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landing", meta = (ClampMin = "0.0"))
+	float HeavyLandingMaxSpeed = 1100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landing", meta = (ClampMin = "0.0"))
+	float LightLandingStateTime = 0.18f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landing", meta = (ClampMin = "0.0"))
+	float HeavyLandingLockTime = 0.3f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landing", meta = (ClampMin = "0.0"))
+	float RollLandingLockTime = 0.65f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landing", meta = (ClampMin = "0.0"))
+	float RollLandingStateTime = 1.7f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "5.0", ClampMax = "170.0"))
+	float DefaultFOV = 90.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "5.0", ClampMax = "170.0"))
+	float SprintFOV = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0"))
+	float DefaultArmLength = 400.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0"))
+	float SprintArmLength = 450.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0"))
+	float CameraTransitionSpeed = 8.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0"))
+	float CameraLagSpeed = 14.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0"))
+	float CameraLagMaxDistance = 35.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0"))
+	float CameraAutoFollowDelay = 0.3f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0"))
+	float CameraAutoFollowInterpSpeed = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0"))
+	float CameraAutoFollowMaxYawSpeed = 180.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float CameraAutoFollowYawTolerance = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "0.0"))
+	float CameraManualLookHoldTime = 0.35f;
+};
+
+UCLASS(BlueprintType)
+class ROVERREPLICA_API URoverMovementConfig : public UPrimaryDataAsset
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement")
+	FRoverMovementSettings Settings;
+};
